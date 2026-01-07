@@ -23,19 +23,23 @@ class Koopo_Stories_Close_Friends_UI {
      */
     public static function register_assets() : void {
         $ver = defined('KOOPO_STORIES_VER') ? KOOPO_STORIES_VER : '1.0.0';
+        $css_path = KOOPO_STORIES_PATH . 'assets/close-friends-ui.css';
+        $js_path = KOOPO_STORIES_PATH . 'assets/close-friends-ui.js';
+        $css_ver = file_exists($css_path) ? (string) filemtime($css_path) : $ver;
+        $js_ver = file_exists($js_path) ? (string) filemtime($js_path) : $ver;
 
         wp_register_style(
             'koopo-close-friends-ui',
             plugins_url('assets/close-friends-ui.css', KOOPO_STORIES_PATH . 'koopo-stories.php'),
             [],
-            $ver
+            $css_ver
         );
 
         wp_register_script(
             'koopo-close-friends-ui',
             plugins_url('assets/close-friends-ui.js', KOOPO_STORIES_PATH . 'koopo-stories.php'),
             [],
-            $ver,
+            $js_ver,
             true
         );
     }
@@ -47,7 +51,7 @@ class Koopo_Stories_Close_Friends_UI {
         wp_enqueue_style('koopo-close-friends-ui');
         wp_enqueue_script('koopo-close-friends-ui');
 
-        wp_localize_script('kooop-close-friends-ui', 'KoopoCloseFriends', [
+        wp_localize_script('koopo-close-friends-ui', 'KoopoCloseFriends', [
             'restUrl' => esc_url_raw( rest_url( Koopo_Stories_Module::REST_NS . '/stories/close-friends' ) ),
             'nonce'   => wp_create_nonce('wp_rest'),
             'userId'  => get_current_user_id(),
@@ -98,7 +102,8 @@ class Koopo_Stories_Close_Friends_UI {
                         $profile_url = function_exists('bp_core_get_user_domain') ? bp_core_get_user_domain($friend_id) : '';
                     ?>
                         <div class="koopo-close-friend-item" data-user-id="<?php echo esc_attr($friend_id); ?>">
-                            <div class="koopo-close-friend-avatar">
+                            <div class="userInfo">
+                                <div class="koopo-close-friend-avatar">
                                 <?php if ( $profile_url ) : ?>
                                     <a href="<?php echo esc_url($profile_url); ?>" target="_blank">
                                         <img src="<?php echo esc_url($avatar_url); ?>" alt="<?php echo esc_attr($user->display_name); ?>">
@@ -121,6 +126,8 @@ class Koopo_Stories_Close_Friends_UI {
                                     @<?php echo esc_html($user->user_login); ?>
                                 </div>
                             </div>
+                            </div>
+                            
                             <div class="koopo-close-friend-actions">
                                 <button
                                     type="button"

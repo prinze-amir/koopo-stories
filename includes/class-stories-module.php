@@ -110,17 +110,21 @@ final class Koopo_Stories_Module {
 
     public function register_assets() : void {
         $ver = defined('KOOPO_STORIES_VER') ? KOOPO_STORIES_VER : '1.0.0';
+        $css_path = KOOPO_STORIES_PATH . 'assets/stories.css';
+        $js_path = KOOPO_STORIES_PATH . 'assets/stories.js';
+        $css_ver = file_exists($css_path) ? (string) filemtime($css_path) : $ver;
+        $js_ver = file_exists($js_path) ? (string) filemtime($js_path) : $ver;
         wp_register_style(
             'koopo-stories',
             plugins_url('assets/stories.css', KOOPO_STORIES_PATH . 'koopo-stories.php'),
             [],
-            $ver
+            $css_ver
         );
         wp_register_script(
             'koopo-stories',
             plugins_url('assets/stories.js', KOOPO_STORIES_PATH . 'koopo-stories.php'),
             [],
-            $ver,
+            $js_ver,
             true
         );
     }

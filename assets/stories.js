@@ -33,6 +33,25 @@
     return res.json();
   }
 
+  async function apiRequest(url, method, body = null) {
+    const isFormData = body instanceof FormData;
+    const fetchHeaders = isFormData ? headers() : { ...headers(), 'Content-Type': 'application/json' };
+    const fetchBody = body ? (isFormData ? body : JSON.stringify(body)) : undefined;
+
+    const res = await fetch(url, {
+      method,
+      credentials: 'same-origin',
+      headers: fetchHeaders,
+      body: fetchBody,
+    });
+    if (!res.ok) {
+      let msg = 'Request failed';
+      try { const j = await res.json(); msg = j.message || j.error || msg; } catch(e){}
+      throw new Error(msg);
+    }
+    return res.json();
+  }
+
   function el(tag, attrs = {}, children = []) {
     const node = document.createElement(tag);
     Object.entries(attrs).forEach(([k,v]) => {
@@ -47,7 +66,7 @@
 
   // Viewer singleton
   const Viewer = (() => {
-    let root, barsWrap, headerAvatar, headerName, closeBtn, reportBtn, stage, tapPrev, tapNext, headerAvatarLink, viewCount, reactionCount, muteBtn;
+    let root, barsWrap, headerAvatar, headerName, closeBtn, reportBtn, stage, tapPrev, tapNext, headerAvatarLink, viewCount, reactionCount, muteBtn, actionsBtn;
     let bottomBar, reactionBtn, replyBtn;
     let story = null;
     let allStories = [];  // All available stories in the tray
@@ -78,9 +97,11 @@
       muteBtn.textContent = '🔇';
       reportBtn = el('button', { class: 'koopo-stories__report', type: 'button', style: 'background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:0 10px;opacity:0.7;', title: 'Report this story' });
       reportBtn.textContent = '⚠';
+      actionsBtn = el('button', { class: 'koopo-stories__actions', type: 'button', style: 'background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:0 8px;opacity:0.8;', title: 'Story options' });
+      actionsBtn.textContent = '. . .';
       closeBtn = el('button', { class: 'koopo-stories__close', type: 'button' }, []);
-      closeBtn.textContent = '×';
-      const header = el('div', { class: 'koopo-stories__header' }, [headerAvatarLink, headerName, statsWrap, muteBtn, reportBtn, closeBtn]);
+      closeBtn.textContent = 'X';
+      const header = el('div', { class: 'koopo-stories__header' }, [headerAvatarLink, headerName, statsWrap, muteBtn, reportBtn, actionsBtn, closeBtn]);
 
       stage = el('div', { class: 'koopo-stories__stage' });
 
@@ -120,6 +141,12 @@
       document.body.appendChild(root);
 
       closeBtn.addEventListener('click', close);
+      actionsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!story) return;
+        paused = true;
+        showStoryActions(story);
+      });
 
       // Set up tap areas with long-press detection for skipping users
       let longPressTimer = null;
@@ -171,13 +198,14 @@
 
       // Touch support for mobile
       tapPrev.addEventListener('touchstart', (e) => {
+        e.preventDefault();
         e.stopPropagation();
         isLongPress = false;
         longPressTimer = setTimeout(() => {
           isLongPress = true;
           skipToPrevUser();
         }, 500);
-      }, { passive: true });
+      }, { passive: false });
 
       tapPrev.addEventListener('touchend', (e) => {
         e.stopPropagation();
@@ -188,13 +216,14 @@
       });
 
       tapNext.addEventListener('touchstart', (e) => {
+        e.preventDefault();
         e.stopPropagation();
         isLongPress = false;
         longPressTimer = setTimeout(() => {
           isLongPress = true;
           skipToNextUser();
         }, 500);
-      }, { passive: true });
+      }, { passive: false });
 
       tapNext.addEventListener('touchend', (e) => {
         e.stopPropagation();
@@ -277,6 +306,9 @@
       const isAuthorChange = previousAuthorId !== null && currentAuthorId !== newAuthorId && root.classList.contains('is-open');
 
       story = storyData;
+      if (!Array.isArray(story.story_ids) || story.story_ids.length === 0) {
+        story.story_ids = [story.story_id];
+      }
       allStories = storiesList;
       currentStoryIndex = storyIdx;
 
@@ -362,9 +394,11 @@
       if (isOwnStory) {
         bottomBar.style.display = 'none';
         reportBtn.style.display = 'none';
+        actionsBtn.style.display = 'block';
       } else {
         bottomBar.style.display = 'flex';
         reportBtn.style.display = 'block';
+        actionsBtn.style.display = 'none';
       }
 
       buildBars(story.items?.length || 0);
@@ -487,6 +521,13 @@
       loop();
     }
 
+    function currentItemStoryId() {
+      const items = story?.items || [];
+      const item = items[itemIndex];
+      const storyId = parseInt(item?.story_id || 0, 10);
+      return storyId > 0 ? storyId : null;
+    }
+
     function loop() {
       cancel();
       const items = story.items || [];
@@ -514,6 +555,7 @@
           // Combine all items from all stories into one virtual story
           const combinedStory = {
             story_id: storyData.story_id,
+            story_ids: storyData.story_ids || [storyData.story_id],
             author: storyData.author,
             items: [],
             privacy: storyData.privacy,
@@ -791,7 +833,7 @@
     return pollContainer;
   }
 
-    return { open, close, resumeStory };
+    return { open, close, resumeStory, currentItemStoryId };
   })();
 
   // Global sticker element creator for composer preview
@@ -1019,6 +1061,7 @@
               // Combine all items from all stories into one virtual story
               const combinedStory = {
                 story_id: clickedStoryData.story_id,
+                story_ids: clickedStoryData.story_ids || [clickedStoryData.story_id],
                 author: clickedStoryData.author,
                 items: [],
                 privacy: clickedStoryData.privacy,
@@ -1507,22 +1550,18 @@
     let isDragging = false;
     let startX, startY, initialLeft, initialTop;
 
-    element.onmousedown = (e) => {
-      if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
+    const startDrag = (clientX, clientY) => {
       isDragging = true;
-      startX = e.clientX;
-      startY = e.clientY;
+      startX = clientX;
+      startY = clientY;
       const rect = container.getBoundingClientRect();
       initialLeft = (position.x / 100) * rect.width;
       initialTop = (position.y / 100) * rect.height;
-      e.preventDefault();
     };
 
-    document.onmousemove = (e) => {
-      if (!isDragging) return;
-
-      const deltaX = e.clientX - startX;
-      const deltaY = e.clientY - startY;
+    const updatePosition = (clientX, clientY) => {
+      const deltaX = clientX - startX;
+      const deltaY = clientY - startY;
       const rect = container.getBoundingClientRect();
 
       const newLeft = initialLeft + deltaX;
@@ -1536,9 +1575,160 @@
       element.style.top = position.y + '%';
     };
 
-    document.onmouseup = () => {
+    const endDrag = () => {
       isDragging = false;
     };
+
+    if ('PointerEvent' in window) {
+      element.style.touchAction = 'none';
+      element.addEventListener('pointerdown', (e) => {
+        if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
+        startDrag(e.clientX, e.clientY);
+        element.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      });
+      element.addEventListener('pointermove', (e) => {
+        if (!isDragging) return;
+        updatePosition(e.clientX, e.clientY);
+      });
+      element.addEventListener('pointerup', endDrag);
+      element.addEventListener('pointercancel', endDrag);
+      return;
+    }
+
+    element.onmousedown = (e) => {
+      if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
+      startDrag(e.clientX, e.clientY);
+      e.preventDefault();
+    };
+
+    document.onmousemove = (e) => {
+      if (!isDragging) return;
+      updatePosition(e.clientX, e.clientY);
+    };
+
+    document.onmouseup = endDrag;
+  }
+
+  function storyIdsForActions(storyData) {
+    const currentStoryId = Viewer.currentItemStoryId?.();
+    if (currentStoryId) return [currentStoryId];
+    if (Array.isArray(storyData.story_ids) && storyData.story_ids.length > 0) {
+      return storyData.story_ids.map(id => parseInt(id, 10)).filter(id => id > 0);
+    }
+    const id = parseInt(storyData.story_id || 0, 10);
+    return id > 0 ? [id] : [];
+  }
+
+  function showStoryActions(storyData) {
+    const overlay = el('div', {
+      class: 'koopo-stories__composer',
+      style: 'z-index:9999999;background:rgba(0,0,0,0.45);'
+    });
+
+    const panel = el('div', {
+      class: 'koopo-stories__composer-panel',
+      style: 'max-width:360px;width:100%;'
+    });
+
+    const title = el('div', { class: 'koopo-stories__composer-title', html: 'Story settings' });
+
+    const privacyWrap = el('div', { class: 'koopo-stories__composer-privacy', style: 'border-top:0;' });
+    const privacyLabel = el('label', { class: 'koopo-stories__composer-privacy-label' });
+    privacyLabel.textContent = 'Privacy';
+    const privacySelect = el('select', { class: 'koopo-stories__composer-privacy-select' });
+    ['public', 'friends', 'close_friends'].forEach((val) => {
+      const opt = el('option', { value: val });
+      opt.textContent = val === 'public' ? 'Public' : (val === 'friends' ? 'Friends Only' : 'Close Friends');
+      if ((storyData.privacy || 'friends') === val) opt.selected = true;
+      privacySelect.appendChild(opt);
+    });
+    privacyWrap.appendChild(privacyLabel);
+    privacyWrap.appendChild(privacySelect);
+
+    const actions = el('div', { class: 'koopo-stories__composer-actions' });
+    const cancelBtn = el('button', { class: 'koopo-stories__composer-cancel', type: 'button' });
+    cancelBtn.textContent = 'Close';
+    const saveBtn = el('button', { class: 'koopo-stories__composer-post', type: 'button' });
+    saveBtn.textContent = 'Save';
+    actions.appendChild(cancelBtn);
+    actions.appendChild(saveBtn);
+
+    const deleteWrap = el('div', { style: 'padding:0 14px 14px 14px;' });
+    const deleteBtn = el('button', {
+      type: 'button',
+      style: 'width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#ff6b6b;font-weight:600;cursor:pointer;'
+    });
+    deleteBtn.textContent = 'Delete story';
+    deleteWrap.appendChild(deleteBtn);
+
+    const closeModal = (resume = true) => {
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      if (resume) Viewer.resumeStory();
+    };
+
+    cancelBtn.onclick = () => closeModal(true);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeModal(true);
+    });
+
+    saveBtn.onclick = async () => {
+      const ids = storyIdsForActions(storyData);
+      if (!ids.length) return closeModal(true);
+
+      const nextPrivacy = privacySelect.value;
+      saveBtn.disabled = true;
+      cancelBtn.disabled = true;
+      deleteBtn.disabled = true;
+      try {
+        for (const id of ids) {
+          await apiRequest(`${API_BASE}/${id}`, 'PATCH', { privacy: nextPrivacy });
+        }
+        storyData.privacy = nextPrivacy;
+        document.querySelectorAll('.koopo-stories').forEach(c => loadTray(c).catch(()=>{}));
+        closeModal(true);
+      } catch (err) {
+        console.error('Failed to update privacy:', err);
+        alert('Failed to update privacy. Please try again.');
+      } finally {
+        saveBtn.disabled = false;
+        cancelBtn.disabled = false;
+        deleteBtn.disabled = false;
+      }
+    };
+
+    deleteBtn.onclick = async () => {
+      const ids = storyIdsForActions(storyData);
+      if (!ids.length) return closeModal(true);
+
+      const confirmText = ids.length > 1 ? 'Delete all active stories?' : 'Delete this story?';
+      if (!confirm(confirmText)) return;
+
+      saveBtn.disabled = true;
+      cancelBtn.disabled = true;
+      deleteBtn.disabled = true;
+      try {
+        for (const id of ids) {
+          await apiRequest(`${API_BASE}/${id}`, 'DELETE');
+        }
+        document.querySelectorAll('.koopo-stories').forEach(c => loadTray(c).catch(()=>{}));
+        closeModal(false);
+        Viewer.close();
+      } catch (err) {
+        console.error('Failed to delete story:', err);
+        alert('Failed to delete story. Please try again.');
+        saveBtn.disabled = false;
+        cancelBtn.disabled = false;
+        deleteBtn.disabled = false;
+      }
+    };
+
+    panel.appendChild(title);
+    panel.appendChild(privacyWrap);
+    panel.appendChild(actions);
+    panel.appendChild(deleteWrap);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
   }
 
   // Show reaction picker

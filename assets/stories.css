@@ -19,8 +19,9 @@
 .koopo-stories__avatar-link:hover{opacity:.85}
 .koopo-stories__close{margin-left:auto;background:transparent;border:0;color:#fff;font-size:20px;cursor:pointer}
 .koopo-stories__stage{flex:1;display:flex;align-items:center;justify-content:center;position:relative;max-height:85%}
-.koopo-stories__media{max-width:100%;max-height:100%;width:auto;height:auto}
-.koopo-stories__tap{position:absolute;top:0;bottom:0;width:50%}
+.koopo-stories__media{max-width:100%;max-height:100%;width:auto;height:auto;position:relative;z-index:1;pointer-events:none}
+.koopo-stories__tap{position:absolute;top:0;bottom:0;width:50%;z-index:5}
+.koopo-stories__tap{touch-action:manipulation}
 .koopo-stories__tap--prev{left:0}
 .koopo-stories__tap--next{right:0}
 .koopo-stories__widget-title{font-weight:600;margin-bottom:6px}
@@ -90,6 +91,7 @@
 
 /* Sticker animations */
 .koopo-stories__sticker{animation:koopo-sticker-pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);}
+.koopo-stories__sticker{touch-action:none}
 @keyframes koopo-sticker-pop{
   0%{transform:translate(-50%,-50%) scale(0);opacity:0;}
   100%{transform:translate(-50%,-50%) scale(1);opacity:1;}

@@ -29,6 +29,19 @@ class Koopo_Stories_REST {
             'permission_callback' => [ __CLASS__, 'must_be_logged_in' ],
         ] );
 
+        register_rest_route( Koopo_Stories_Module::REST_NS, '/stories/(?P<id>\d+)', [
+            [
+                'methods' => WP_REST_Server::EDITABLE,
+                'callback' => [ __CLASS__, 'update_story' ],
+                'permission_callback' => [ __CLASS__, 'must_be_logged_in' ],
+            ],
+            [
+                'methods' => WP_REST_Server::DELETABLE,
+                'callback' => [ __CLASS__, 'delete_story' ],
+                'permission_callback' => [ __CLASS__, 'must_be_logged_in' ],
+            ],
+        ] );
+
         register_rest_route( Koopo_Stories_Module::REST_NS, '/stories/items/(?P<id>\d+)/seen', [
             'methods' => WP_REST_Server::CREATABLE,
             'callback' => [ __CLASS__, 'mark_seen' ],
@@ -231,9 +244,6 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
                 $author_ids[] = $user_id;
             }
             $author_ids = array_values(array_unique(array_filter(array_map('intval', $author_ids))));
-            if ( empty($author_ids) ) {
-                return new WP_REST_Response([ 'stories' => [] ], 200);
-            }
         }
 
         // Query a bit more if we plan to sort by unseen-first, so we can fill the limit after sorting
@@ -263,14 +273,17 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             ],
         ];
 
-        if ( $scope !== 'all' ) {
+        if ( $scope !== 'all' && ! empty($author_ids) ) {
             $q['author__in'] = $author_ids;
         }
 
         // Fetch stories for the requested scope.
         // For friends/following scopes, we ALSO include public stories from everyone so that
         // users who set privacy=public can be discovered outside of connections.
-        $stories_scoped = get_posts($q);
+        $stories_scoped = [];
+        if ( $scope === 'all' || ! empty($author_ids) ) {
+            $stories_scoped = get_posts($q);
+        }
 
         $stories_public = [];
         if ( $scope !== 'all' ) {
@@ -366,7 +379,7 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
                     'unseen_count' => 0,
                     'items_count' => 0,
                     'all_items' => [],
-                    'privacy' => 'friends',
+                    'privacy' => 'public',
                 ];
             }
 
@@ -394,8 +407,16 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             // Update privacy if this story is more restrictive
             $privacy = get_post_meta($sid, 'privacy', true);
             if ( empty($privacy) ) $privacy = 'friends';
-            if ( $privacy === 'close_friends' ) {
-                $grouped[$author_id]['privacy'] = 'close_friends';
+            $privacy_rank = [
+                'public' => 0,
+                'friends' => 1,
+                'close_friends' => 2,
+            ];
+            $current_privacy = $grouped[$author_id]['privacy'];
+            $current_rank = $privacy_rank[$current_privacy] ?? 0;
+            $next_rank = $privacy_rank[$privacy] ?? $current_rank;
+            if ( $next_rank > $current_rank ) {
+                $grouped[$author_id]['privacy'] = $privacy;
             }
         }
 
@@ -528,6 +549,7 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
 
             $items_out[] = [
                 'item_id' => $item_id,
+                'story_id' => $story_id,
                 'type' => $type,
                 'src' => $src,
                 'thumb' => $thumb,
@@ -569,6 +591,59 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
                 'reactions' => $reaction_counts,
             ],
         ], 200);
+    }
+
+    public static function update_story( WP_REST_Request $req ) {
+        $user_id = get_current_user_id();
+        $story_id = (int) $req['id'];
+
+        $story = get_post($story_id);
+        if ( ! $story || $story->post_type !== Koopo_Stories_Module::CPT_STORY ) {
+            return new WP_REST_Response([ 'error' => 'not_found' ], 404);
+        }
+
+        $author_id = (int) $story->post_author;
+        if ( $author_id !== $user_id && ! user_can($user_id, 'manage_options') ) {
+            return new WP_REST_Response([ 'error' => 'forbidden' ], 403);
+        }
+
+        $privacy = $req->get_param('privacy');
+        if ( $privacy !== null ) {
+            $allowed_privacy = ['public', 'friends', 'close_friends'];
+            $privacy = in_array($privacy, $allowed_privacy, true) ? $privacy : 'friends';
+            update_post_meta($story_id, 'privacy', $privacy);
+        } else {
+            $privacy = get_post_meta($story_id, 'privacy', true);
+            if ( empty($privacy) ) $privacy = 'friends';
+        }
+
+        return new WP_REST_Response([
+            'story_id' => $story_id,
+            'privacy' => $privacy,
+        ], 200);
+    }
+
+    public static function delete_story( WP_REST_Request $req ) {
+        $user_id = get_current_user_id();
+        $story_id = (int) $req['id'];
+
+        $story = get_post($story_id);
+        if ( ! $story || $story->post_type !== Koopo_Stories_Module::CPT_STORY ) {
+            return new WP_REST_Response([ 'error' => 'not_found' ], 404);
+        }
+
+        $author_id = (int) $story->post_author;
+        if ( $author_id !== $user_id && ! user_can($user_id, 'manage_options') ) {
+            return new WP_REST_Response([ 'error' => 'forbidden' ], 403);
+        }
+
+        if ( class_exists('Koopo_Stories_Cleanup') ) {
+            Koopo_Stories_Cleanup::delete_story($story_id);
+        } else {
+            wp_delete_post($story_id, true);
+        }
+
+        return new WP_REST_Response([ 'deleted' => true, 'story_id' => $story_id ], 200);
     }
 
     public static function mark_seen( WP_REST_Request $req ) {
