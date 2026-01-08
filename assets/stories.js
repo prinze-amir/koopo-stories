@@ -1115,9 +1115,23 @@
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*,video/*';
-    input.onchange = async () => {
-      if (!input.files || !input.files[0]) return;
-      openComposer(input.files[0]);
+    input.style.position = 'fixed';
+    input.style.left = '-9999px';
+    input.style.top = '0';
+    document.body.appendChild(input);
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      if (!file) {
+        input.remove();
+        return;
+      }
+      openComposer(file);
+      input.value = '';
+      input.remove();
+    };
+    input.onclick = () => {
+      // Reset so selecting the same file still triggers change on mobile.
+      input.value = '';
     };
     input.click();
   }
