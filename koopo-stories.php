@@ -3,7 +3,7 @@
  * Plugin Name: Koopo Stories
  * Plugin URI: http://www.docs.koopoonline.com/
  * Description: Custom blocks and shortcodes for advance features.
- * Version: 2.0
+ * Version: 2.0.2
  * Author: Plu2oprinze
  * Author URI: http://www.koopoonline.com
  */
