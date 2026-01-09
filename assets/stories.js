@@ -2076,6 +2076,7 @@
   // Show reaction picker
   function showReactionPicker(storyId) {
     const reactions = ['❤️', '😂', '😮', '😢', '👏', '🔥', '💩', '🤦🏽‍♂️', '👿', '🤯'];
+    const maxVisible = isMobile ? 6 : reactions.length;
 
     const overlay = el('div', {
       class: 'koopo-stories__composer',
@@ -2083,40 +2084,56 @@
     });
 
     const picker = el('div', {
-      style: 'background:rgba(0,0,0,0.66);border-radius:50px;padding:12px 16px;display:flex;gap:8px;box-shadow:0 4px 20px rgba(0,0,0,0.3);'
+      style: 'background:rgba(0,0,0,0.66);border-radius:50px;padding:12px 16px;display:flex;gap:8px;box-shadow:0 4px 20px rgba(0,0,0,0.3);flex-wrap:wrap;justify-content:center;max-width:90vw;'
     });
 
-    reactions.forEach(emoji => {
-      const btn = el('button', {
-        style: 'background:none;border:none;font-size:32px;cursor:pointer;padding:8px;transition:transform 0.2s;',
-        type: 'button'
-      });
-      btn.textContent = emoji;
-      btn.onmouseover = () => { btn.style.transform = 'scale(1.2)'; };
-      btn.onmouseout = () => { btn.style.transform = 'scale(1)'; };
-      btn.onclick = async () => {
-        overlay.remove();
-        Viewer.resumeStory(); // Resume story after closing modal
-        try {
-          const fd = new FormData();
-          fd.append('reaction', emoji);
-          await apiPost(`${API_BASE}/${storyId}/reactions`, fd);
-          // Update reaction button to show user reacted
-          const viewer = document.querySelector('.koopo-stories__viewer');
-          if (viewer) {
-            const reactionBtn = viewer.querySelector('.koopo-stories__action-btn');
-            if (reactionBtn) {
-              reactionBtn.textContent = emoji;
-              reactionBtn.style.transform = 'scale(1.2)';
-              setTimeout(() => { reactionBtn.style.transform = 'scale(1)'; }, 200);
+    const renderPicker = (count) => {
+      picker.innerHTML = '';
+      const visible = reactions.slice(0, count);
+      visible.forEach(emoji => {
+        const btn = el('button', {
+          style: `background:none;border:none;font-size:${isMobile ? '36px' : '32px'};cursor:pointer;padding:8px;transition:transform 0.2s;`,
+          type: 'button'
+        });
+        btn.textContent = emoji;
+        btn.onmouseover = () => { btn.style.transform = 'scale(1.2)'; };
+        btn.onmouseout = () => { btn.style.transform = 'scale(1)'; };
+        btn.onclick = async () => {
+          overlay.remove();
+          Viewer.resumeStory(); // Resume story after closing modal
+          try {
+            const fd = new FormData();
+            fd.append('reaction', emoji);
+            await apiPost(`${API_BASE}/${storyId}/reactions`, fd);
+            // Update reaction button to show user reacted
+            const viewer = document.querySelector('.koopo-stories__viewer');
+            if (viewer) {
+              const reactionBtn = viewer.querySelector('.koopo-stories__action-btn');
+              if (reactionBtn) {
+                reactionBtn.textContent = emoji;
+                reactionBtn.style.transform = 'scale(1.2)';
+                setTimeout(() => { reactionBtn.style.transform = 'scale(1)'; }, 200);
+              }
             }
+          } catch(e) {
+            console.error('Failed to add reaction:', e);
           }
-        } catch(e) {
-          console.error('Failed to add reaction:', e);
-        }
-      };
-      picker.appendChild(btn);
-    });
+        };
+        picker.appendChild(btn);
+      });
+
+      if (isMobile && count < reactions.length) {
+        const moreBtn = el('button', {
+          style: 'background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);font-size:18px;color:#fff;border-radius:999px;padding:10px 14px;cursor:pointer;',
+          type: 'button'
+        });
+        moreBtn.textContent = '+';
+        moreBtn.onclick = () => renderPicker(reactions.length);
+        picker.appendChild(moreBtn);
+      }
+    };
+
+    renderPicker(maxVisible);
 
     overlay.onclick = (e) => {
       if (e.target === overlay) {
