@@ -193,9 +193,13 @@ final class Koopo_Stories_Admin {
 
         echo '<p><a class="button button-primary" href="' . esc_url( admin_url('admin.php?page=' . self::SETTINGS_SLUG) ) . '">' . esc_html__('Open Settings', 'koopo') . '</a></p>';
 
-        echo '<h2>' . esc_html__('Shortcode Examples', 'koopo') . '</h2>';
+        echo '<h2>' . esc_html__('Shortcodes', 'koopo') . '</h2>';
+        echo '<p><strong>' . esc_html__('Stories Tray (Friends)', 'koopo') . ':</strong></p>';
         echo '<code>[koopo_stories_widget title="Friends Stories" limit="12" scope="friends" order="unseen_first" layout="horizontal" exclude_me="1" show_uploader="1" show_unseen_badge="1"]</code><br/><br/>';
-        echo '<code>[koopo_stories_widget title="Following" limit="12" scope="following" order="recent_activity" layout="vertical" exclude_me="0"]</code>';
+        echo '<p><strong>' . esc_html__('Stories Tray (Following)', 'koopo') . ':</strong></p>';
+        echo '<code>[koopo_stories_widget title="Following" limit="12" scope="following" order="recent_activity" layout="vertical" exclude_me="0"]</code><br/><br/>';
+        echo '<p><strong>' . esc_html__('Archived Stories (Current User)', 'koopo') . ':</strong></p>';
+        echo '<code>[koopo_stories_archive title="Archived Stories" limit="20" layout="horizontal"]</code>';
 
         echo '</div>';
     }

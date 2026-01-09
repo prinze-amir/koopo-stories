@@ -3,13 +3,28 @@
 
   const API_BASE = window.KoopoStories.restUrl; // .../koopo/v1/stories
   const NONCE = window.KoopoStories.nonce;
+  const isMobile = (window.matchMedia && window.matchMedia('(max-width: 768px)').matches)
+    || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+
+  function withCompact(url) {
+    if (!isMobile) return url;
+    try {
+      const u = new URL(url, window.location.origin);
+      if (!u.searchParams.has('compact')) {
+        u.searchParams.set('compact', '1');
+      }
+      return u.toString();
+    } catch (e) {
+      return url;
+    }
+  }
 
   const headers = () => ({
     'X-WP-Nonce': NONCE,
   });
 
   async function apiGet(url) {
-    const res = await fetch(url, { credentials: 'same-origin', headers: headers() });
+    const res = await fetch(withCompact(url), { credentials: 'same-origin', headers: headers() });
     if (!res.ok) throw new Error('Request failed');
     return res.json();
   }
@@ -417,7 +432,7 @@
         story = null;
 
         // Refresh all trays when viewer closes to show updated data
-        document.querySelectorAll('.koopo-stories').forEach(c => loadTray(c).catch(()=>{}));
+        document.querySelectorAll('.koopo-stories').forEach(c => refreshTray(c));
       }, 300); // Match CSS transition duration
     }
 
@@ -991,12 +1006,114 @@
     }
   }
 
+  function refreshTray(container) {
+    if (container.getAttribute('data-archive') === '1') {
+      container.dataset.archivePage = '1';
+      container.dataset.archiveHasMore = '1';
+      container.dataset.archiveLoading = '1';
+      return loadArchiveTray(container, { page: 1 }).catch(()=>{});
+    }
+    return loadTray(container).catch(()=>{});
+  }
+
+  async function loadArchiveTray(container, opts = {}) {
+    const limit = container.getAttribute('data-limit') || '20';
+    const append = opts.append === true;
+    const page = opts.page || 1;
+
+    if (!append) {
+      container.innerHTML = '<div class="koopo-stories__loader"><div class="koopo-stories__spinner"></div></div>';
+      container._storiesList = [];
+    }
+
+    try {
+      const data = await apiGet(`${API_BASE}/archive?limit=${encodeURIComponent(limit)}&page=${encodeURIComponent(page)}`);
+      const stories = data.stories || [];
+      const hasMore = !!data.has_more;
+
+      if (!append) {
+        container.innerHTML = '';
+      }
+
+      if (!append && stories.length === 0) {
+        container.innerHTML = '<div style="padding:20px;text-align:center;color:#999;">Archive empty</div>';
+        container.dataset.archiveHasMore = '0';
+        container.dataset.archiveLoading = '0';
+        container.dataset.archivePage = '1';
+        return;
+      }
+
+      container._storiesList = (container._storiesList || []).concat(stories);
+      stories.forEach(s => container.appendChild(archiveCard(s, container)));
+
+      container.dataset.archiveHasMore = hasMore ? '1' : '0';
+      container.dataset.archivePage = String(page);
+    } catch (err) {
+      console.error('Failed to load archived stories:', err);
+      if (!append) {
+        container.innerHTML = '<div style="padding:20px;text-align:center;color:#999;">Failed to load archived stories</div>';
+      }
+    } finally {
+      container.dataset.archiveLoading = '0';
+    }
+  }
+
+  function archiveCard(s, container) {
+    const card = el('div', { class: 'koopo-stories__archive-card', 'data-story-id': String(s.story_id || 0) });
+    const cover = el('div', { class: 'koopo-stories__archive-cover' });
+    const img = el('img', { src: s.cover_thumb || s.author?.avatar || '' });
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    cover.appendChild(img);
+
+    const meta = el('div', { class: 'koopo-stories__archive-meta' });
+    const title = el('div', { class: 'koopo-stories__archive-title' });
+    title.textContent = s.author?.name ? `Story by ${s.author.name}` : 'Archived story';
+    const date = el('div', { class: 'koopo-stories__archive-date' });
+    if (s.created_at) {
+      const d = new Date(s.created_at);
+      date.textContent = isNaN(d.getTime()) ? '' : d.toLocaleDateString();
+    }
+    const views = el('div', { class: 'koopo-stories__archive-views' });
+    const viewCount = typeof s.view_count === 'number' ? s.view_count : 0;
+    views.textContent = `👀 ${viewCount}`;
+    meta.appendChild(title);
+    meta.appendChild(date);
+    meta.appendChild(views);
+
+    card.appendChild(cover);
+    card.appendChild(meta);
+
+    card.addEventListener('click', async () => {
+      const storyId = s.story_id;
+      if (!storyId) return;
+
+      const loadingOverlay = el('div', { class: 'koopo-stories__click-loader with-overlay' });
+      const spinner = el('div', { class: 'koopo-stories__spinner' });
+      loadingOverlay.appendChild(spinner);
+      document.body.appendChild(loadingOverlay);
+
+      try {
+        const story = await apiGet(`${API_BASE}/${storyId}`);
+        const storiesList = container?._storiesList || [];
+        const clickedIndex = storiesList.findIndex(st => String(st.story_id) === String(storyId));
+        Viewer.open(story, storiesList, clickedIndex >= 0 ? clickedIndex : 0);
+      } finally {
+        loadingOverlay.remove();
+      }
+    });
+
+    return card;
+  }
+
   function bubble(s, isUploader, showUnseenBadge) {
     const seen = s.has_unseen ? '0' : '1';
     const b = el('div', { class: 'koopo-stories__bubble', 'data-story-id': String(s.story_id || 0), 'data-seen': seen });
     const avatar = el('div', { class: 'koopo-stories__avatar' });
     const ring = el('div', { class: 'koopo-stories__ring' });
     const img = el('img', { src: s.author?.avatar || s.cover_thumb || '' });
+    img.loading = 'lazy';
+    img.decoding = 'async';
     avatar.appendChild(ring);
     avatar.appendChild(img);
 
@@ -1276,7 +1393,7 @@
 
         status.textContent = 'Posted!';
         // Refresh all trays/widgets on page
-        document.querySelectorAll('.koopo-stories').forEach(c => loadTray(c).catch(()=>{}));
+        document.querySelectorAll('.koopo-stories').forEach(c => refreshTray(c));
         setTimeout(close, 400);
       } catch(e) {
         status.textContent = e.message || 'Upload failed';
@@ -1635,6 +1752,12 @@
   }
 
   function showStoryActions(storyData) {
+    const targetIds = storyIdsForActions(storyData);
+    const targetStoryId = targetIds[0];
+    if (!targetStoryId) {
+      Viewer.resumeStory();
+      return;
+    }
     const overlay = el('div', {
       class: 'koopo-stories__composer',
       style: 'z-index:9999999;background:rgba(0,0,0,0.45);'
@@ -1668,6 +1791,37 @@
     actions.appendChild(cancelBtn);
     actions.appendChild(saveBtn);
 
+    const hideWrap = el('div', { style: 'padding:0 14px 14px 14px;border-top:1px solid rgba(255,255,255,.08);' });
+    const hideTitle = el('div', { style: 'font-size:13px;font-weight:600;margin:10px 0 6px 0;' });
+    hideTitle.textContent = 'Hide from specific users';
+    const hideInputWrap = el('div', { style: 'position:relative;' });
+    const hideInput = el('input', {
+      type: 'text',
+      placeholder: 'Search by username',
+      style: 'width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:#1a1a1a;color:#fff;'
+    });
+    const hideInputSpinner = el('div', { class: 'koopo-stories__spinner koopo-stories__spinner--sm koopo-stories__input-spinner' });
+    const hideDropdown = el('div', {
+      style: 'position:absolute;left:0;right:0;top:38px;background:#111;border:1px solid rgba(255,255,255,.1);border-radius:8px;max-height:200px;overflow:auto;display:none;z-index:5;'
+    });
+    hideInputWrap.appendChild(hideInput);
+    hideInputWrap.appendChild(hideInputSpinner);
+    hideInputWrap.appendChild(hideDropdown);
+    const hideAddBtn = el('button', {
+      type: 'button',
+      style: 'margin-top:8px;width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:#2a2a2a;color:#fff;font-weight:600;cursor:pointer;'
+    });
+    hideAddBtn.textContent = 'Add to hidden list';
+    const hideAddSpinner = el('span', { class: 'koopo-stories__spinner koopo-stories__spinner--sm koopo-stories__btn-spinner' });
+    hideAddBtn.appendChild(hideAddSpinner);
+    const hiddenList = el('div', { style: 'margin-top:10px;display:flex;flex-direction:column;gap:6px;position:relative;min-height:20px;' });
+    const hiddenListSpinner = el('div', { class: 'koopo-stories__spinner koopo-stories__spinner--sm koopo-stories__list-spinner' });
+    hiddenList.appendChild(hiddenListSpinner);
+    hideWrap.appendChild(hideTitle);
+    hideWrap.appendChild(hideInputWrap);
+    hideWrap.appendChild(hideAddBtn);
+    hideWrap.appendChild(hiddenList);
+
     const deleteWrap = el('div', { style: 'padding:0 14px 14px 14px;' });
     const deleteBtn = el('button', {
       type: 'button',
@@ -1675,6 +1829,15 @@
     });
     deleteBtn.textContent = 'Delete story';
     deleteWrap.appendChild(deleteBtn);
+
+    const archiveWrap = el('div', { style: 'padding:0 14px 14px 14px;' });
+    const archiveBtn = el('button', {
+      type: 'button',
+      style: 'width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#fff;font-weight:600;cursor:pointer;'
+    });
+    const isArchived = !!storyData.is_archived;
+    archiveBtn.textContent = isArchived ? 'Unarchive story' : 'Archive story';
+    archiveWrap.appendChild(archiveBtn);
 
     const closeModal = (resume = true) => {
       if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
@@ -1694,12 +1857,14 @@
       saveBtn.disabled = true;
       cancelBtn.disabled = true;
       deleteBtn.disabled = true;
+      archiveBtn.disabled = true;
+      hideAddBtn.disabled = true;
       try {
         for (const id of ids) {
           await apiRequest(`${API_BASE}/${id}`, 'PATCH', { privacy: nextPrivacy });
         }
         storyData.privacy = nextPrivacy;
-        document.querySelectorAll('.koopo-stories').forEach(c => loadTray(c).catch(()=>{}));
+        document.querySelectorAll('.koopo-stories').forEach(c => refreshTray(c));
         closeModal(true);
       } catch (err) {
         console.error('Failed to update privacy:', err);
@@ -1708,6 +1873,38 @@
         saveBtn.disabled = false;
         cancelBtn.disabled = false;
         deleteBtn.disabled = false;
+        archiveBtn.disabled = false;
+        hideAddBtn.disabled = false;
+      }
+    };
+
+    archiveBtn.onclick = async () => {
+      const ids = storyIdsForActions(storyData);
+      if (!ids.length) return closeModal(true);
+
+      archiveBtn.disabled = true;
+      cancelBtn.disabled = true;
+      saveBtn.disabled = true;
+      deleteBtn.disabled = true;
+      hideAddBtn.disabled = true;
+      try {
+        const nextArchived = !storyData.is_archived;
+        for (const id of ids) {
+          await apiRequest(`${API_BASE}/${id}`, 'PATCH', { archive: nextArchived });
+        }
+        storyData.is_archived = nextArchived;
+        archiveBtn.textContent = nextArchived ? 'Unarchive story' : 'Archive story';
+        document.querySelectorAll('.koopo-stories').forEach(c => refreshTray(c));
+        closeModal(true);
+      } catch (err) {
+        console.error('Failed to update archive:', err);
+        alert('Failed to update archive. Please try again.');
+      } finally {
+        archiveBtn.disabled = false;
+        cancelBtn.disabled = false;
+        saveBtn.disabled = false;
+        deleteBtn.disabled = false;
+        hideAddBtn.disabled = false;
       }
     };
 
@@ -1725,7 +1922,7 @@
         for (const id of ids) {
           await apiRequest(`${API_BASE}/${id}`, 'DELETE');
         }
-        document.querySelectorAll('.koopo-stories').forEach(c => loadTray(c).catch(()=>{}));
+        document.querySelectorAll('.koopo-stories').forEach(c => refreshTray(c));
         closeModal(false);
         Viewer.close();
       } catch (err) {
@@ -1734,15 +1931,146 @@
         saveBtn.disabled = false;
         cancelBtn.disabled = false;
         deleteBtn.disabled = false;
+        archiveBtn.disabled = false;
+        hideAddBtn.disabled = false;
+      }
+    };
+
+    function renderHiddenUsers(users) {
+      hiddenList.innerHTML = '';
+      hiddenList.appendChild(hiddenListSpinner);
+      hiddenListSpinner.style.display = 'none';
+      if (!users.length) {
+        const empty = el('div', { style: 'font-size:12px;opacity:0.7;' });
+        empty.textContent = 'No hidden users yet.';
+        hiddenList.appendChild(empty);
+        return;
+      }
+      users.forEach(u => {
+        const row = el('div', { style: 'display:flex;align-items:center;gap:8px;' });
+        const avatar = el('img', { src: u.avatar || '', style: 'width:28px;height:28px;border-radius:999px;object-fit:cover;' });
+        const label = el('div', { style: 'font-size:13px;flex:1;' });
+        label.textContent = `@${u.username || u.name || u.id}`;
+        const removeBtn = el('button', {
+          type: 'button',
+          style: 'padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.2);background:#222;color:#fff;font-size:12px;cursor:pointer;'
+        });
+        removeBtn.textContent = 'Remove';
+        removeBtn.onclick = async () => {
+          removeBtn.disabled = true;
+          try {
+            hiddenListSpinner.style.display = 'block';
+            await apiRequest(`${API_BASE}/${targetStoryId}/hide/${u.id}`, 'DELETE');
+            await loadHiddenUsers();
+          } catch (err) {
+            console.error('Failed to remove hidden user:', err);
+            alert('Failed to remove user. Please try again.');
+          } finally {
+            removeBtn.disabled = false;
+          }
+        };
+        row.appendChild(avatar);
+        row.appendChild(label);
+        row.appendChild(removeBtn);
+        hiddenList.appendChild(row);
+      });
+    }
+
+    async function loadHiddenUsers() {
+      hiddenListSpinner.style.display = 'block';
+      try {
+        const data = await apiGet(`${API_BASE}/${targetStoryId}/hide`);
+        renderHiddenUsers(data.users || []);
+      } catch (err) {
+        console.error('Failed to load hidden users:', err);
+      } finally {
+        hiddenListSpinner.style.display = 'none';
+      }
+    }
+
+    hideInput.oninput = async () => {
+      const query = hideInput.value.trim();
+      hideDropdown.innerHTML = '';
+      hideDropdown.style.display = 'none';
+      hideInput.dataset.userId = '';
+      hideInputSpinner.style.display = 'none';
+
+      if (query.length < 2) return;
+
+      try {
+        hideInputSpinner.style.display = 'block';
+        const response = await fetch(`${window.location.origin}/wp-json/buddyboss/v1/members?search=${encodeURIComponent(query)}&per_page=10`, {
+          method: 'GET',
+          headers: { 'X-WP-Nonce': window.KoopoStories?.nonce || '' }
+        });
+        if (!response.ok) throw new Error('Failed to fetch members');
+        const members = await response.json();
+        if (!members || members.length === 0) return;
+
+        members.forEach(member => {
+          const option = el('div', { style: 'padding:8px 10px;cursor:pointer;display:flex;align-items:center;gap:8px;' });
+          const avatar = el('img', { src: member.avatar_urls?.thumb || member.avatar_urls?.full || '', style: 'width:28px;height:28px;border-radius:999px;' });
+          const label = el('div', { style: 'font-size:13px;' });
+          label.textContent = `@${member.user_login || member.mention_name || ''} • ${member.name || ''}`;
+          option.appendChild(avatar);
+          option.appendChild(label);
+          option.onclick = () => {
+            hideInput.value = member.user_login || member.mention_name || member.name;
+            hideInput.dataset.userId = String(member.id || '');
+            hideDropdown.style.display = 'none';
+          };
+          hideDropdown.appendChild(option);
+        });
+        hideDropdown.style.display = 'block';
+      } catch (err) {
+        console.error('Failed to search members:', err);
+      } finally {
+        hideInputSpinner.style.display = 'none';
+      }
+    };
+
+    overlay.addEventListener('click', (e) => {
+      if (!hideInputWrap.contains(e.target)) {
+        hideDropdown.style.display = 'none';
+      }
+    });
+
+    hideAddBtn.onclick = async () => {
+      let uid = parseInt(hideInput.dataset.userId || '', 10);
+      if (!uid && /^\d+$/.test(hideInput.value.trim())) {
+        uid = parseInt(hideInput.value.trim(), 10);
+      }
+      if (!uid) {
+        alert('Select a user to hide.');
+        return;
+      }
+      hideAddBtn.disabled = true;
+      hideAddSpinner.style.display = 'inline-block';
+      try {
+        hiddenListSpinner.style.display = 'block';
+        await apiRequest(`${API_BASE}/${targetStoryId}/hide/${uid}`, 'POST');
+        hideInput.value = '';
+        hideInput.dataset.userId = '';
+        await loadHiddenUsers();
+      } catch (err) {
+        console.error('Failed to hide user:', err);
+        alert('Failed to hide user. Please try again.');
+      } finally {
+        hideAddBtn.disabled = false;
+        hideAddSpinner.style.display = 'none';
       }
     };
 
     panel.appendChild(title);
     panel.appendChild(privacyWrap);
     panel.appendChild(actions);
+    panel.appendChild(hideWrap);
+    panel.appendChild(archiveWrap);
     panel.appendChild(deleteWrap);
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
+
+    loadHiddenUsers();
   }
 
   // Show reaction picker
@@ -2045,7 +2373,29 @@
 
   function init() {
     const nodes = document.querySelectorAll('.koopo-stories');
-    nodes.forEach(n => loadTray(n).catch(()=>{}));
+    nodes.forEach(n => refreshTray(n));
+    initArchiveInfiniteScroll();
+  }
+
+  function initArchiveInfiniteScroll() {
+    const onScroll = () => {
+      const archives = document.querySelectorAll('.koopo-stories[data-archive="1"]');
+      archives.forEach(container => {
+        const isLoading = container.dataset.archiveLoading === '1';
+        const hasMore = container.dataset.archiveHasMore !== '0';
+        if (isLoading || !hasMore) return;
+
+        const rect = container.getBoundingClientRect();
+        const nearBottom = rect.bottom - window.innerHeight < 200;
+        if (!nearBottom) return;
+
+        const nextPage = parseInt(container.dataset.archivePage || '1', 10) + 1;
+        container.dataset.archiveLoading = '1';
+        loadArchiveTray(container, { append: true, page: nextPage });
+      });
+    };
+
+    window.addEventListener('scroll', onScroll, { passive: true });
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

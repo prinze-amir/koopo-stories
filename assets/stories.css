@@ -60,6 +60,10 @@
 .koopo-stories__loader.with-overlay{background:rgba(0,0,0,.7);}
 .koopo-stories__click-loader{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:999999;background:rgba(0,0,0,.7);}
 .koopo-stories__spinner{width:40px;height:40px;border:3px solid rgba(255,186,18,.3);border-top-color:#ffba12;border-radius:50%;animation:koopo-spin 0.8s linear infinite;}
+.koopo-stories__spinner--sm{width:16px;height:16px;border-width:2px;}
+.koopo-stories__input-spinner{position:absolute;right:10px;top:50%;transform:translateY(-50%);display:none;}
+.koopo-stories__btn-spinner{display:none;margin-left:8px;vertical-align:middle;}
+.koopo-stories__list-spinner{position:absolute;align-self:center;display:none;}
 @keyframes koopo-spin{to{transform:rotate(360deg);}}
 
 /* Smooth Animations */
@@ -101,6 +105,14 @@
 .koopo-stories__interaction-overlay{position:absolute;inset:0;background:rgba(0,0,0,.4);z-index:100;display:none;align-items:center;justify-content:center;}
 .koopo-stories__interaction-overlay.active{display:flex;}
 .koopo-stories__header .emoji {
-    border-radius: 0;
-    padding: 5px;
 }
+
+.koopo-stories--archive{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:14px;padding:20px}
+.koopo-stories__archive-card{background:#111;border-radius:16px;overflow:hidden;cursor:pointer;border:1px solid rgba(255,255,255,.08);box-shadow:3px 2px 13px 2px rgb(56 55 55 / 91%);transition:transform .2s ease, box-shadow .2s ease;}
+.koopo-stories__archive-card:hover{transform:translateY(-2px);box-shadow:0 10px 22px rgba(0,0,0,.3);}
+.koopo-stories__archive-cover{aspect-ratio:1/1;background:#1a1a1a;display:flex;align-items:center;justify-content:center;}
+.koopo-stories__archive-cover img{width:100%;height:100%;object-fit:cover;display:block;}
+.koopo-stories__archive-meta{padding:10px 12px;color:#fff;display:flex;flex-direction:column;gap:4px;}
+.koopo-stories__archive-title{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.koopo-stories__archive-date{font-size:11px;opacity:.7;}
+.koopo-stories__archive-views{font-size:11px;opacity:.8;}

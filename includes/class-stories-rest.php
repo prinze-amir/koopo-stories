@@ -2,6 +2,16 @@
 if ( ! defined('ABSPATH') ) exit;
 
 class Koopo_Stories_REST {
+    const API_VERSION = '1.1';
+
+    private static function bump_user_feed_salt( int $user_id ) : void {
+        if ( $user_id <= 0 ) return;
+        update_user_meta($user_id, 'koopo_stories_feed_salt', (string) time());
+    }
+
+    private static function bump_global_feed_salt() : void {
+        update_option('koopo_stories_feed_global_salt', (string) time(), false);
+    }
 
     public static function register_routes() : void {
         register_rest_route( Koopo_Stories_Module::REST_NS, '/stories', [
@@ -40,6 +50,31 @@ class Koopo_Stories_REST {
                 'callback' => [ __CLASS__, 'delete_story' ],
                 'permission_callback' => [ __CLASS__, 'must_be_logged_in' ],
             ],
+        ] );
+
+        register_rest_route( Koopo_Stories_Module::REST_NS, '/stories/(?P<story_id>\d+)/hide', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [ __CLASS__, 'get_story_hidden_users' ],
+            'permission_callback' => [ __CLASS__, 'must_be_logged_in' ],
+        ] );
+
+        register_rest_route( Koopo_Stories_Module::REST_NS, '/stories/(?P<story_id>\d+)/hide/(?P<user_id>\d+)', [
+            [
+                'methods' => WP_REST_Server::CREATABLE,
+                'callback' => [ __CLASS__, 'add_story_hidden_user' ],
+                'permission_callback' => [ __CLASS__, 'must_be_logged_in' ],
+            ],
+            [
+                'methods' => WP_REST_Server::DELETABLE,
+                'callback' => [ __CLASS__, 'remove_story_hidden_user' ],
+                'permission_callback' => [ __CLASS__, 'must_be_logged_in' ],
+            ],
+        ] );
+
+        register_rest_route( Koopo_Stories_Module::REST_NS, '/stories/archive', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [ __CLASS__, 'get_archived_stories' ],
+            'permission_callback' => [ __CLASS__, 'must_be_logged_in' ],
         ] );
 
         register_rest_route( Koopo_Stories_Module::REST_NS, '/stories/items/(?P<id>\d+)/seen', [
@@ -186,6 +221,7 @@ class Koopo_Stories_REST {
 
     public static function get_feed( WP_REST_Request $req ) {
         $user_id = get_current_user_id();
+        $compact = $req->get_param('compact') === '1' || $req->get_param('mobile') === '1';
 
 // Capability: must be able to upload media
 if ( ! current_user_can('upload_files') ) {
@@ -230,6 +266,22 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
         $order = $req->get_param('order');
         $order = in_array($order, ['unseen_first','recent_activity'], true) ? $order : 'unseen_first';
 
+        $user_salt = (string) get_user_meta($user_id, 'koopo_stories_feed_salt', true);
+        $global_salt = (string) get_option('koopo_stories_feed_global_salt', '');
+        $cache_key = 'koopo_stories_feed_' . md5(implode('|', [
+            $user_id,
+            $scope,
+            (int) $exclude_me,
+            $order,
+            $limit,
+            $user_salt,
+            $global_salt,
+        ]));
+        $cached = get_transient($cache_key);
+        if ( is_array($cached) ) {
+            return new WP_REST_Response($cached, 200);
+        }
+
         // Resolve which authors we should include for this scope
         $author_ids = [];
         if ( $scope === 'friends' ) {
@@ -252,6 +304,20 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             $query_limit = min(200, max($limit, $limit * 4));
         }
 
+        $expiry_clause = [
+            'relation' => 'OR',
+            [
+                'key' => 'expires_at',
+                'value' => time(),
+                'compare' => '>',
+                'type' => 'NUMERIC',
+            ],
+            [
+                'key' => 'expires_at',
+                'compare' => 'NOT EXISTS',
+            ],
+        ];
+
         $q = [
             'post_type' => Koopo_Stories_Module::CPT_STORY,
             'post_status' => 'publish',
@@ -259,16 +325,20 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             'orderby' => ($order === 'recent_activity' || $order === 'unseen_first') ? 'modified' : 'date',
             'order' => 'DESC',
             'meta_query' => [
-                'relation' => 'OR',
+                'relation' => 'AND',
+                $expiry_clause,
                 [
-                    'key' => 'expires_at',
-                    'value' => time(),
-                    'compare' => '>',
-                    'type' => 'NUMERIC',
-                ],
-                [
-                    'key' => 'expires_at',
-                    'compare' => 'NOT EXISTS',
+                    'relation' => 'OR',
+                    [
+                        'key' => 'is_archived',
+                        'compare' => 'NOT EXISTS',
+                    ],
+                    [
+                        'key' => 'is_archived',
+                        'value' => 1,
+                        'compare' => '!=',
+                        'type' => 'NUMERIC',
+                    ],
                 ],
             ],
         ];
@@ -288,7 +358,6 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
         $stories_public = [];
         if ( $scope !== 'all' ) {
             // Build a nested meta_query: ( (expires_at > now OR expires_at NOT EXISTS) AND privacy = public )
-            $expiry_clause = isset($q['meta_query']) ? $q['meta_query'] : [];
             $q_public = $q;
             unset($q_public['author__in']);
             $q_public['meta_query'] = [
@@ -331,6 +400,34 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             return ($ta > $tb) ? -1 : 1;
         });
 
+        // Preload all items for these stories in a single query to avoid per-story lookups.
+        $story_ids = array_map(function($p){ return (int) $p->ID; }, $stories);
+        $items_by_story = [];
+        if ( ! empty($story_ids) ) {
+            $items_all = get_posts([
+                'post_type' => Koopo_Stories_Module::CPT_ITEM,
+                'post_status' => 'publish',
+                'fields' => 'ids',
+                'posts_per_page' => -1,
+                'meta_query' => [
+                    [
+                        'key' => 'story_id',
+                        'value' => $story_ids,
+                        'compare' => 'IN',
+                    ],
+                ],
+                'orderby' => 'date',
+                'order' => 'ASC',
+            ]);
+
+            foreach ( $items_all as $item_id ) {
+                $sid = (int) get_post_meta($item_id, 'story_id', true);
+                if ( $sid <= 0 ) continue;
+                if ( ! isset($items_by_story[$sid]) ) $items_by_story[$sid] = [];
+                $items_by_story[$sid][] = (int) $item_id;
+            }
+        }
+
         // Group stories by author_id
         $grouped = [];
         foreach ( $stories as $story ) {
@@ -341,16 +438,7 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
                 continue;
             }
 
-            $items = get_posts([
-                'post_type' => Koopo_Stories_Module::CPT_ITEM,
-                'post_status' => 'publish',
-                'fields' => 'ids',
-                'posts_per_page' => -1,
-                'meta_key' => 'story_id',
-                'meta_value' => $sid,
-                'orderby' => 'date',
-                'order' => 'ASC',
-            ]);
+            $items = $items_by_story[$sid] ?? [];
 
             $items_count = is_array($items) ? count($items) : 0;
             if ( $items_count === 0 ) continue;
@@ -463,11 +551,22 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
 
         $out = array_slice($out, 0, $limit);
 
-        return new WP_REST_Response([ 'stories' => array_values($out) ], 200);
+        $payload = [
+            'api_version' => self::API_VERSION,
+            'stories' => array_values($out),
+        ];
+        if ( $compact ) {
+            foreach ( $payload['stories'] as &$row ) {
+                unset($row['author']['profile_url']);
+            }
+        }
+        set_transient($cache_key, $payload, 60);
+        return new WP_REST_Response($payload, 200);
     }
 
     public static function get_story( WP_REST_Request $req ) {
         $user_id = get_current_user_id();
+        $compact = $req->get_param('compact') === '1' || $req->get_param('mobile') === '1';
 
 // Capability: must be able to upload media
 if ( ! current_user_can('upload_files') ) {
@@ -544,9 +643,6 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             $duration = (int) get_post_meta($item_id, 'duration_ms', true);
             if ( $duration <= 0 && $type === 'image' ) $duration = 5000;
 
-            // Get stickers for this item
-            $stickers = Koopo_Stories_Stickers::get_stickers($item_id);
-
             $items_out[] = [
                 'item_id' => $item_id,
                 'story_id' => $story_id,
@@ -555,8 +651,11 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
                 'thumb' => $thumb,
                 'duration_ms' => $type === 'image' ? $duration : null,
                 'created_at' => mysql_to_rfc3339( get_gmt_from_date($item->post_date) ),
-                'stickers' => $stickers,
             ];
+
+            if ( ! $compact ) {
+                $items_out[count($items_out) - 1]['stickers'] = Koopo_Stories_Stickers::get_stickers($item_id);
+            }
         }
 
         $profile_url = '';
@@ -566,6 +665,7 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
 
         $privacy = get_post_meta($story_id, 'privacy', true);
         if ( empty($privacy) ) $privacy = 'friends';
+        $is_archived = (int) get_post_meta($story_id, 'is_archived', true) === 1;
 
         // Get view counts
         $item_ids = array_map(function($item) { return (int) $item->ID; }, $items);
@@ -575,7 +675,8 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
         $reaction_counts = Koopo_Stories_Reactions::get_reaction_counts($story_id);
         $total_reactions = array_sum($reaction_counts);
 
-        return new WP_REST_Response([
+        $payload = [
+            'api_version' => self::API_VERSION,
             'story_id' => $story_id,
             'author' => [
                 'id' => $author_id,
@@ -585,12 +686,23 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             ],
             'items' => $items_out,
             'privacy' => $privacy,
+            'is_archived' => $is_archived,
             'analytics' => [
                 'view_count' => $view_count,
                 'reaction_count' => $total_reactions,
                 'reactions' => $reaction_counts,
             ],
-        ], 200);
+        ];
+
+        if ( $compact ) {
+            unset($payload['author']['profile_url']);
+            unset($payload['analytics']['reactions']);
+            foreach ( $payload['items'] as &$item ) {
+                unset($item['thumb']);
+            }
+        }
+
+        return new WP_REST_Response($payload, 200);
     }
 
     public static function update_story( WP_REST_Request $req ) {
@@ -617,9 +729,28 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             if ( empty($privacy) ) $privacy = 'friends';
         }
 
+        $archive_param = $req->get_param('archive');
+        if ( $archive_param !== null ) {
+            $archive = filter_var($archive_param, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            $archive = ($archive === null) ? false : $archive;
+            update_post_meta($story_id, 'is_archived', $archive ? 1 : 0);
+
+            if ( $archive ) {
+                update_post_meta($story_id, 'expires_at', time() - 1);
+            } else {
+                $duration_hours = (int) get_option('koopo_stories_duration_hours', 24);
+                if ( $duration_hours < 1 ) $duration_hours = 24;
+                $expires_at_new = time() + ( $duration_hours * HOUR_IN_SECONDS );
+                update_post_meta($story_id, 'expires_at', $expires_at_new);
+            }
+        }
+
+        self::bump_global_feed_salt();
+        self::bump_user_feed_salt($user_id);
         return new WP_REST_Response([
             'story_id' => $story_id,
             'privacy' => $privacy,
+            'is_archived' => (int) get_post_meta($story_id, 'is_archived', true) === 1,
         ], 200);
     }
 
@@ -643,7 +774,199 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             wp_delete_post($story_id, true);
         }
 
+        self::bump_global_feed_salt();
+        self::bump_user_feed_salt($user_id);
         return new WP_REST_Response([ 'deleted' => true, 'story_id' => $story_id ], 200);
+    }
+
+    private static function get_hidden_user_ids( int $story_id ) : array {
+        $hidden = get_post_meta($story_id, 'hide_from_user_ids', true);
+        if ( empty($hidden) ) return [];
+        if ( is_string($hidden) ) {
+            $hidden = array_filter(array_map('intval', explode(',', $hidden)));
+        }
+        if ( ! is_array($hidden) ) return [];
+        return array_values(array_unique(array_map('intval', $hidden)));
+    }
+
+    private static function can_manage_story( int $story_id, int $user_id ) : bool {
+        $author_id = (int) get_post_field('post_author', $story_id);
+        return $author_id === $user_id || user_can($user_id, 'manage_options');
+    }
+
+    public static function get_story_hidden_users( WP_REST_Request $req ) {
+        $user_id = get_current_user_id();
+        $story_id = (int) $req['story_id'];
+
+        $story = get_post($story_id);
+        if ( ! $story || $story->post_type !== Koopo_Stories_Module::CPT_STORY ) {
+            return new WP_REST_Response([ 'error' => 'not_found' ], 404);
+        }
+        if ( ! self::can_manage_story($story_id, $user_id) ) {
+            return new WP_REST_Response([ 'error' => 'forbidden' ], 403);
+        }
+
+        $hidden_ids = self::get_hidden_user_ids($story_id);
+        $users = [];
+        foreach ( $hidden_ids as $hid ) {
+            $u = get_user_by('id', $hid);
+            if ( ! $u ) continue;
+            $users[] = [
+                'id' => $hid,
+                'name' => $u->display_name,
+                'username' => $u->user_login,
+                'avatar' => get_avatar_url($hid, [ 'size' => 64 ]),
+            ];
+        }
+
+        return new WP_REST_Response([ 'users' => $users ], 200);
+    }
+
+    public static function add_story_hidden_user( WP_REST_Request $req ) {
+        $user_id = get_current_user_id();
+        $story_id = (int) $req['story_id'];
+        $hide_user_id = (int) $req['user_id'];
+
+        $story = get_post($story_id);
+        if ( ! $story || $story->post_type !== Koopo_Stories_Module::CPT_STORY ) {
+            return new WP_REST_Response([ 'error' => 'not_found' ], 404);
+        }
+        if ( ! self::can_manage_story($story_id, $user_id) ) {
+            return new WP_REST_Response([ 'error' => 'forbidden' ], 403);
+        }
+        if ( $hide_user_id <= 0 || $hide_user_id === (int) $story->post_author ) {
+            return new WP_REST_Response([ 'error' => 'invalid_user' ], 400);
+        }
+
+        $hidden_ids = self::get_hidden_user_ids($story_id);
+        if ( ! in_array($hide_user_id, $hidden_ids, true) ) {
+            $hidden_ids[] = $hide_user_id;
+            update_post_meta($story_id, 'hide_from_user_ids', array_values(array_unique($hidden_ids)));
+        }
+
+        self::bump_global_feed_salt();
+        return new WP_REST_Response([ 'ok' => true, 'user_id' => $hide_user_id ], 200);
+    }
+
+    public static function remove_story_hidden_user( WP_REST_Request $req ) {
+        $user_id = get_current_user_id();
+        $story_id = (int) $req['story_id'];
+        $hide_user_id = (int) $req['user_id'];
+
+        $story = get_post($story_id);
+        if ( ! $story || $story->post_type !== Koopo_Stories_Module::CPT_STORY ) {
+            return new WP_REST_Response([ 'error' => 'not_found' ], 404);
+        }
+        if ( ! self::can_manage_story($story_id, $user_id) ) {
+            return new WP_REST_Response([ 'error' => 'forbidden' ], 403);
+        }
+        if ( $hide_user_id <= 0 ) {
+            return new WP_REST_Response([ 'error' => 'invalid_user' ], 400);
+        }
+
+        $hidden_ids = self::get_hidden_user_ids($story_id);
+        $hidden_ids = array_values(array_filter($hidden_ids, function($id) use ($hide_user_id) {
+            return (int) $id !== $hide_user_id;
+        }));
+        update_post_meta($story_id, 'hide_from_user_ids', $hidden_ids);
+
+        self::bump_global_feed_salt();
+        return new WP_REST_Response([ 'ok' => true, 'user_id' => $hide_user_id ], 200);
+    }
+
+    public static function get_archived_stories( WP_REST_Request $req ) {
+        $user_id = get_current_user_id();
+        $limit = max(1, min(50, intval($req->get_param('limit') ?: 20)));
+        $page = max(1, intval($req->get_param('page') ?: 1));
+        $compact = $req->get_param('compact') === '1' || $req->get_param('mobile') === '1';
+
+        $stories = get_posts([
+            'post_type' => Koopo_Stories_Module::CPT_STORY,
+            'post_status' => 'any',
+            'author' => $user_id,
+            'posts_per_page' => $limit,
+            'paged' => $page,
+            'orderby' => 'date',
+            'order' => 'DESC',
+            'meta_query' => [
+                [
+                    'key' => 'is_archived',
+                    'value' => 1,
+                    'compare' => '=',
+                    'type' => 'NUMERIC',
+                ],
+            ],
+        ]);
+
+        $out = [];
+        foreach ( $stories as $story ) {
+            $sid = (int) $story->ID;
+            $items = get_posts([
+                'post_type' => Koopo_Stories_Module::CPT_ITEM,
+                'post_status' => 'publish',
+                'fields' => 'ids',
+                'posts_per_page' => -1,
+                'meta_key' => 'story_id',
+                'meta_value' => $sid,
+                'orderby' => 'date',
+                'order' => 'ASC',
+            ]);
+
+            $items_count = is_array($items) ? count($items) : 0;
+            if ( $items_count === 0 ) continue;
+
+            $author_id = (int) $story->post_author;
+            $profile_url = function_exists('bp_core_get_user_domain') ? bp_core_get_user_domain($author_id) : '';
+            $cover_thumb = '';
+            if ( ! empty($items) ) {
+                $first_item_id = (int) $items[0];
+                $att_id = (int) get_post_meta($first_item_id, 'attachment_id', true);
+                if ( $att_id ) {
+                    $thumb = wp_get_attachment_image_url($att_id, 'thumbnail');
+                    if ( $thumb ) $cover_thumb = $thumb;
+                }
+            }
+
+            $privacy = get_post_meta($sid, 'privacy', true);
+            if ( empty($privacy) ) $privacy = 'friends';
+
+            $out[] = [
+                'story_id' => $sid,
+                'story_ids' => [ $sid ],
+                'author' => [
+                    'id' => $author_id,
+                    'name' => get_the_author_meta('display_name', $author_id),
+                    'avatar' => get_avatar_url($author_id, [ 'size' => 96 ]),
+                    'profile_url' => $profile_url,
+                ],
+                'cover_thumb' => $cover_thumb,
+                'last_updated' => get_post_modified_time(DATE_ATOM, true, $sid),
+                'created_at' => mysql_to_rfc3339( get_gmt_from_date($story->post_date) ),
+                'has_unseen' => false,
+                'unseen_count' => 0,
+                'items_count' => $items_count,
+                'privacy' => $privacy,
+                'view_count' => Koopo_Stories_Views_Table::get_story_view_count($items),
+                'is_archived' => true,
+            ];
+        }
+
+        $has_more = count($out) === $limit;
+
+        $payload = [
+            'api_version' => self::API_VERSION,
+            'stories' => $out,
+            'has_more' => $has_more,
+            'page' => $page,
+        ];
+
+        if ( $compact ) {
+            foreach ( $payload['stories'] as &$row ) {
+                unset($row['author']['profile_url']);
+            }
+        }
+
+        return new WP_REST_Response($payload, 200);
     }
 
     public static function mark_seen( WP_REST_Request $req ) {
@@ -695,6 +1018,7 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
         }
 
         Koopo_Stories_Views_Table::mark_seen($item_id, $user_id);
+        self::bump_user_feed_salt($user_id);
         return new WP_REST_Response([ 'ok' => true ], 200);
     }
 
@@ -737,8 +1061,22 @@ $max_items_per_story = (int) get_option('koopo_stories_max_items_per_story', 20)
 if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
 
 
+        $files = $req->get_file_params();
+        if ( ( empty($_FILES['file']) || ! is_array($_FILES['file']) ) && isset($files['file']) ) {
+            $_FILES['file'] = $files['file'];
+        }
+
         if ( empty($_FILES['file']) || ! is_array($_FILES['file']) ) {
-            return new WP_REST_Response([ 'error' => 'missing_file' ], 400);
+            $max_upload = wp_max_upload_size();
+            $content_len = (int) ( $_SERVER['CONTENT_LENGTH'] ?? 0 );
+            $message = $content_len > 0
+                ? 'Upload exceeded server limits.'
+                : 'Missing file.';
+            return new WP_REST_Response([
+                'error' => 'missing_file',
+                'message' => $message,
+                'max_upload_bytes' => $max_upload,
+            ], 400);
         }
 
         require_once ABSPATH . 'wp-admin/includes/file.php';
@@ -861,6 +1199,9 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             'post_modified_gmt' => current_time('mysql', 1),
         ]);
 
+        self::bump_global_feed_salt();
+        self::bump_user_feed_salt($user_id);
+        do_action('koopo_stories_story_created', $story_id, $item_id, $user_id);
         return new WP_REST_Response([
             'ok' => true,
             'story_id' => $story_id,
@@ -1011,6 +1352,7 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
         if ( $success ) {
             // Send BuddyBoss notification
             self::send_reaction_notification($story_id, $user_id, $reaction);
+            do_action('koopo_stories_reaction_added', $story_id, $user_id, $reaction, $item_id);
 
             return new WP_REST_Response([
                 'ok' => true,
@@ -1104,6 +1446,7 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             if ( $is_dm ) {
                 self::send_reply_notification($story_id, $user_id, $message);
             }
+            do_action('koopo_stories_reply_added', $story_id, $user_id, $reply_id, $item_id, (bool) $is_dm);
 
             return new WP_REST_Response([
                 'ok' => true,

@@ -75,6 +75,7 @@ final class Koopo_Stories_Module {
         // Widget + shortcode
         add_action('widgets_init', [ 'Koopo_Stories_Widget', 'register' ]);
         add_shortcode('koopo_stories_widget', [ $this, 'shortcode_widget' ]);
+        add_shortcode('koopo_stories_archive', [ $this, 'shortcode_archive' ]);
 
         // Close Friends UI
         Koopo_Stories_Close_Friends_UI::init();
@@ -194,6 +195,38 @@ final class Koopo_Stories_Module {
             esc_attr($order),
             esc_attr($show_uploader ? '1' : '0'),
             esc_attr($show_badge ? '1' : '0')
+        );
+        return ob_get_clean();
+    }
+
+    public function shortcode_archive( $atts = [] ) : string {
+        if ( ! is_user_logged_in() ) return '';
+        if ( get_option(self::OPTION_ENABLE, '1') !== '1' ) return '';
+
+        $atts = shortcode_atts([
+            'title' => '',
+            'limit' => 20,
+            'layout' => get_option('koopo_stories_default_layout', 'horizontal'),
+        ], $atts, 'koopo_stories_archive');
+
+        $limit = max(1, min(50, intval($atts['limit'])));
+        $layout = in_array($atts['layout'], ['horizontal','vertical'], true) ? $atts['layout'] : 'horizontal';
+
+        $classes = 'koopo-stories';
+        if ( $layout === 'vertical' ) $classes .= ' koopo-stories--vertical';
+        $classes .= ' koopo-stories--archive';
+
+        $this->enqueue_assets();
+
+        ob_start();
+        if ( ! empty($atts['title']) ) {
+            echo '<h3 class="koopo-stories__title">' . esc_html($atts['title']) . '</h3>';
+        }
+        printf(
+            '<div class="%s" data-archive="1" data-limit="%d" data-layout="%s"><div class="koopo-stories__loader"><div class="koopo-stories__spinner"></div></div></div>',
+            esc_attr($classes),
+            esc_attr($limit),
+            esc_attr($layout)
         );
         return ob_get_clean();
     }

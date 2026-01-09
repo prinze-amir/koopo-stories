@@ -16,6 +16,16 @@ class Koopo_Stories_Permissions {
         if ( $author_id === $viewer_id ) return true;
         if ( user_can($viewer_id, 'manage_options') ) return true;
 
+        // Respect BuddyBoss/BuddyPress block relationships.
+        if ( self::is_blocked_between($author_id, $viewer_id) ) {
+            return false;
+        }
+
+        // Per-story hidden user list (does not block user globally).
+        if ( self::is_hidden_from_story($story_id, $viewer_id) ) {
+            return false;
+        }
+
         $privacy = get_post_meta($story_id, 'privacy', true);
         if ( empty($privacy) ) $privacy = 'friends';
 
@@ -37,6 +47,40 @@ class Koopo_Stories_Permissions {
         // follow relationship (BuddyBoss Follow or BuddyPress followers plugin)
         if ( self::is_following($viewer_id, $author_id) ) {
             return true;
+        }
+
+        return false;
+    }
+
+    public static function is_hidden_from_story( int $story_id, int $viewer_id ) : bool {
+        if ( $story_id <= 0 || $viewer_id <= 0 ) return false;
+        $hidden = get_post_meta($story_id, 'hide_from_user_ids', true);
+        if ( empty($hidden) ) return false;
+        if ( is_string($hidden) ) {
+            $hidden = array_filter(array_map('intval', explode(',', $hidden)));
+        }
+        if ( ! is_array($hidden) ) return false;
+        return in_array($viewer_id, array_map('intval', $hidden), true);
+    }
+
+    public static function is_blocked_between( int $user_a, int $user_b ) : bool {
+        if ( $user_a <= 0 || $user_b <= 0 ) return false;
+
+        // BuddyBoss Platform
+        if ( function_exists('bp_is_user_blocked') ) {
+            if ( bp_is_user_blocked($user_a, $user_b) || bp_is_user_blocked($user_b, $user_a) ) {
+                return true;
+            }
+        }
+        if ( function_exists('bp_is_user_blocked_by') ) {
+            if ( bp_is_user_blocked_by($user_a, $user_b) || bp_is_user_blocked_by($user_b, $user_a) ) {
+                return true;
+            }
+        }
+        if ( function_exists('bb_is_user_blocked') ) {
+            if ( bb_is_user_blocked($user_a, $user_b) || bb_is_user_blocked($user_b, $user_a) ) {
+                return true;
+            }
         }
 
         return false;

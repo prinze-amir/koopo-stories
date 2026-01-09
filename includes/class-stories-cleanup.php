@@ -10,19 +10,34 @@ class Koopo_Stories_Cleanup {
             'fields' => 'ids',
             'posts_per_page' => 200,
             'meta_query' => [
+                'relation' => 'AND',
                 [
                     'key' => 'expires_at',
                     'value' => time(),
                     'compare' => '<=',
                     'type' => 'NUMERIC',
-                ]
+                ],
+                [
+                    'relation' => 'OR',
+                    [
+                        'key' => 'is_archived',
+                        'compare' => 'NOT EXISTS',
+                    ],
+                    [
+                        'key' => 'is_archived',
+                        'value' => 1,
+                        'compare' => '!=',
+                        'type' => 'NUMERIC',
+                    ],
+                ],
             ],
         ]);
 
         if ( empty($expired_story_ids) ) return;
 
         foreach ( $expired_story_ids as $story_id ) {
-            self::delete_story((int)$story_id);
+            $sid = (int) $story_id;
+            update_post_meta($sid, 'is_archived', 1);
         }
     }
 

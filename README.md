@@ -234,8 +234,8 @@ Here is the **official project roadmap** for the Stories feature, aligned to com
 - User reporting UI with 7 report reasons
 - ⚠ Report button in story viewer
 - REST API for reporting and moderation
-- Admin moderation dashboard with stats
-- Auto-hide stories after threshold (configurable, default: 5)
+✅ Admin moderation dashboard with stats
+✅ Auto-hide stories after threshold (configurable, default: 5)
 - Dismiss or delete reported stories
 - Audit trail with reviewer tracking
 - Can't report own stories
@@ -364,3 +364,16 @@ Phase 0 complete, moving to Phase 9
 - Performance optimization (Phase 14) can run parallel with feature development
 - All phases maintain backward compatibility with existing stories
 
+---
+
+## 📡 API Notes (Phase 15)
+
+- `api_version`: All feed/story/archive responses include `api_version` (current: `1.1`).
+- `compact=1` or `mobile=1`: Optional query param to return a lighter payload.
+  - Feed: omits `author.profile_url`.
+  - Story detail: omits `author.profile_url`, `analytics.reactions`, and item `thumb`.
+  - Archive: omits `author.profile_url`.
+- Push notification hooks (for external integrations):
+  - `koopo_stories_story_created` (story_id, item_id, user_id)
+  - `koopo_stories_reaction_added` (story_id, user_id, reaction, item_id)
+  - `koopo_stories_reply_added` (story_id, user_id, reply_id, item_id, is_dm)
