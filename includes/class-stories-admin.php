@@ -122,6 +122,22 @@ final class Koopo_Stories_Admin {
             'sanitize_callback' => function($v){ $v = intval($v); return max(0, min(100, $v)); },
             'default' => 5,
         ]);
+        // Rate limits (per hour, 0 = disabled)
+        register_setting(self::SETTINGS_GROUP, 'koopo_stories_rate_limit_reactions', [
+            'type' => 'integer',
+            'sanitize_callback' => function($v){ $v = intval($v); return max(0, min(1000, $v)); },
+            'default' => 200,
+        ]);
+        register_setting(self::SETTINGS_GROUP, 'koopo_stories_rate_limit_replies', [
+            'type' => 'integer',
+            'sanitize_callback' => function($v){ $v = intval($v); return max(0, min(500, $v)); },
+            'default' => 60,
+        ]);
+        register_setting(self::SETTINGS_GROUP, 'koopo_stories_rate_limit_reports', [
+            'type' => 'integer',
+            'sanitize_callback' => function($v){ $v = intval($v); return max(0, min(200, $v)); },
+            'default' => 10,
+        ]);
 
         register_setting(self::SETTINGS_GROUP, 'koopo_stories_default_layout', [
             'type' => 'string',
@@ -160,6 +176,10 @@ final class Koopo_Stories_Admin {
         add_settings_field('koopo_stories_max_items_per_story', __('Max Items Per Story', 'koopo'), [ __CLASS__, 'field_max_items' ], self::SETTINGS_SLUG, 'koopo_stories_core');
         add_settings_field('koopo_stories_max_upload_size_mb', __('Max Upload Size (MB)', 'koopo'), [ __CLASS__, 'field_max_size' ], self::SETTINGS_SLUG, 'koopo_stories_core');
         add_settings_field('koopo_stories_allowed_mimes', __('Allowed File Types', 'koopo'), [ __CLASS__, 'field_mimes' ], self::SETTINGS_SLUG, 'koopo_stories_core');
+        add_settings_field('koopo_stories_rate_limit_reactions', __('Rate Limit: Reactions (per hour)', 'koopo'), [ __CLASS__, 'field_rate_limit_reactions' ], self::SETTINGS_SLUG, 'koopo_stories_core');
+        add_settings_field('koopo_stories_rate_limit_replies', __('Rate Limit: Replies (per hour)', 'koopo'), [ __CLASS__, 'field_rate_limit_replies' ], self::SETTINGS_SLUG, 'koopo_stories_core');
+        add_settings_field('koopo_stories_rate_limit_reports', __('Rate Limit: Reports (per hour)', 'koopo'), [ __CLASS__, 'field_rate_limit_reports' ], self::SETTINGS_SLUG, 'koopo_stories_core');
+        add_settings_field('koopo_stories_legacy_migration', __('Back-Compat Tools', 'koopo'), [ __CLASS__, 'field_legacy_tools' ], self::SETTINGS_SLUG, 'koopo_stories_core');
 
         add_settings_section('koopo_stories_defaults', __('Defaults (Widget / Shortcode / Tray)', 'koopo'), function(){
             echo '<p>' . esc_html__('These defaults apply when a widget/shortcode does not specify a value.', 'koopo') . '</p>';
@@ -208,6 +228,14 @@ final class Koopo_Stories_Admin {
         if ( ! current_user_can('manage_options') ) return;
         echo '<div class="wrap">';
         echo '<h1>' . esc_html__('Stories Settings', 'koopo') . '</h1>';
+        if ( isset($_POST['koopo_stories_migrate_privacy']) && check_admin_referer('koopo_stories_legacy_tools') ) {
+            $count = self::migrate_privacy_connections();
+            echo '<div class="notice notice-success"><p>' . esc_html(sprintf('Updated %d stories from connections to friends.', $count)) . '</p></div>';
+        }
+        if ( isset($_POST['koopo_stories_cleanup_orphans']) && check_admin_referer('koopo_stories_legacy_tools') ) {
+            $count = self::cleanup_orphan_items();
+            echo '<div class="notice notice-success"><p>' . esc_html(sprintf('Removed %d orphan story items.', $count)) . '</p></div>';
+        }
         echo '<form method="post" action="options.php">';
         settings_fields(self::SETTINGS_GROUP);
         do_settings_sections(self::SETTINGS_SLUG);
@@ -427,6 +455,76 @@ final class Koopo_Stories_Admin {
                 esc_html($label)
             );
         }
+    }
+
+    public static function field_rate_limit_reactions() : void {
+        $v = intval(get_option('koopo_stories_rate_limit_reactions', 200));
+        printf('<input type="number" min="0" max="1000" name="koopo_stories_rate_limit_reactions" value="%d" />', esc_attr($v));
+        echo '<p class="description">' . esc_html__('0 disables rate limiting. Default 200/hour.', 'koopo') . '</p>';
+    }
+
+    public static function field_rate_limit_replies() : void {
+        $v = intval(get_option('koopo_stories_rate_limit_replies', 60));
+        printf('<input type="number" min="0" max="500" name="koopo_stories_rate_limit_replies" value="%d" />', esc_attr($v));
+        echo '<p class="description">' . esc_html__('0 disables rate limiting. Default 60/hour.', 'koopo') . '</p>';
+    }
+
+    public static function field_rate_limit_reports() : void {
+        $v = intval(get_option('koopo_stories_rate_limit_reports', 10));
+        printf('<input type="number" min="0" max="200" name="koopo_stories_rate_limit_reports" value="%d" />', esc_attr($v));
+        echo '<p class="description">' . esc_html__('0 disables rate limiting. Default 10/hour.', 'koopo') . '</p>';
+    }
+
+    public static function field_legacy_tools() : void {
+        if ( ! current_user_can('manage_options') ) return;
+        wp_nonce_field('koopo_stories_legacy_tools');
+        echo '<div style="display:flex;gap:12px;flex-wrap:wrap;">';
+        echo '<button type="submit" name="koopo_stories_migrate_privacy" class="button">' . esc_html__('Migrate privacy: connections → friends', 'koopo') . '</button>';
+        echo '<button type="submit" name="koopo_stories_cleanup_orphans" class="button">' . esc_html__('Remove orphan story items', 'koopo') . '</button>';
+        echo '</div>';
+        echo '<p class="description">' . esc_html__('Use these tools once to clean legacy data. Orphan items are story items without a valid attachment.', 'koopo') . '</p>';
+    }
+
+    private static function migrate_privacy_connections() : int {
+        $stories = get_posts([
+            'post_type' => Koopo_Stories_Module::CPT_STORY,
+            'post_status' => 'any',
+            'fields' => 'ids',
+            'posts_per_page' => -1,
+            'meta_query' => [
+                [
+                    'key' => 'privacy',
+                    'value' => 'connections',
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+
+        $count = 0;
+        foreach ( $stories as $sid ) {
+            update_post_meta((int) $sid, 'privacy', 'friends');
+            $count++;
+        }
+        return $count;
+    }
+
+    private static function cleanup_orphan_items() : int {
+        $items = get_posts([
+            'post_type' => Koopo_Stories_Module::CPT_ITEM,
+            'post_status' => 'any',
+            'fields' => 'ids',
+            'posts_per_page' => -1,
+        ]);
+
+        $count = 0;
+        foreach ( $items as $item_id ) {
+            $att_id = (int) get_post_meta((int) $item_id, 'attachment_id', true);
+            if ( ! $att_id || ! wp_get_attachment_url($att_id) ) {
+                wp_delete_post((int) $item_id, true);
+                $count++;
+            }
+        }
+        return $count;
     }
 
     public static function field_scope() : void {

@@ -28,6 +28,7 @@ class Koopo_Stories_Permissions {
 
         $privacy = get_post_meta($story_id, 'privacy', true);
         if ( empty($privacy) ) $privacy = 'friends';
+        if ( $privacy === 'connections' ) $privacy = 'friends';
 
         if ( $privacy === 'public' ) {
             return true;

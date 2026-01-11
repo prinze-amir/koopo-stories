@@ -5,7 +5,6 @@
     background: #fff;
     border-radius: 12px;
     padding: 24px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .koopo-close-friends-header h3 {
@@ -53,7 +52,6 @@
     align-items: center;
     gap: 12px;
     padding: 12px;
-    border: 1px solid #e5e5e5;
     border-radius: 10px;
     transition: all 0.2s;
     justify-content: space-between;

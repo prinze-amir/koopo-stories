@@ -3,6 +3,8 @@
 
   const API_BASE = window.KoopoStories.restUrl; // .../koopo/v1/stories
   const NONCE = window.KoopoStories.nonce;
+  const i18n = window.KoopoStoriesI18n || {};
+  const t = (key, fallback) => (i18n && i18n[key]) ? i18n[key] : fallback;
   const isMobile = (window.matchMedia && window.matchMedia('(max-width: 768px)').matches)
     || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
 
@@ -108,13 +110,13 @@
       statsWrap.appendChild(viewCount);
       statsWrap.appendChild(reactionCount);
 
-      muteBtn = el('button', { class: 'koopo-stories__mute', type: 'button', style: 'background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:0 10px;opacity:0.7;', title: 'Toggle sound' });
+      muteBtn = el('button', { class: 'koopo-stories__mute', type: 'button', style: 'background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:0 10px;opacity:0.7;', title: 'Toggle sound', 'aria-label': 'Toggle sound' });
       muteBtn.textContent = '🔇';
-      reportBtn = el('button', { class: 'koopo-stories__report', type: 'button', style: 'background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:0 10px;opacity:0.7;', title: 'Report this story' });
+      reportBtn = el('button', { class: 'koopo-stories__report', type: 'button', style: 'background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:0 10px;opacity:0.7;', title: 'Report this story', 'aria-label': 'Report this story' });
       reportBtn.textContent = '⚠';
-      actionsBtn = el('button', { class: 'koopo-stories__actions', type: 'button', style: 'background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:0 8px;opacity:0.8;', title: 'Story options' });
+      actionsBtn = el('button', { class: 'koopo-stories__actions', type: 'button', style: 'background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:0 8px;opacity:0.8;', title: 'Story options', 'aria-label': 'Story options' });
       actionsBtn.textContent = '. . .';
-      closeBtn = el('button', { class: 'koopo-stories__close', type: 'button' }, []);
+      closeBtn = el('button', { class: 'koopo-stories__close', type: 'button', 'aria-label': 'Close story viewer' }, []);
       closeBtn.textContent = 'X';
       const header = el('div', { class: 'koopo-stories__header' }, [headerAvatarLink, headerName, statsWrap, muteBtn, reportBtn, actionsBtn, closeBtn]);
 
@@ -135,6 +137,7 @@
       reactionBtn = el('button', {
         class: 'koopo-stories__action-btn',
         style: 'background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:8px 16px;',
+        'aria-label': 'React to story',
         type: 'button'
       });
       reactionBtn.textContent = '❤️';
@@ -142,6 +145,7 @@
       replyBtn = el('button', {
         class: 'koopo-stories__action-btn',
         style: 'background:none;border:none;color:#fff;font-size:16px;cursor:pointer;padding:8px 16px;',
+        'aria-label': 'Reply to story',
         type: 'button'
       });
       replyBtn.textContent = '💬 Reply';
@@ -152,10 +156,26 @@
       }, [reactionBtn, replyBtn]);
 
       const top = el('div', { class: 'koopo-stories__viewer-top' }, [barsWrap, header]);
-      root = el('div', { class: 'koopo-stories__viewer', role: 'dialog', 'aria-modal': 'true' }, [top, stage, bottomBar]);
+      root = el('div', { class: 'koopo-stories__viewer', role: 'dialog', 'aria-modal': 'true', tabindex: '0' }, [top, stage, bottomBar]);
       document.body.appendChild(root);
 
       closeBtn.addEventListener('click', close);
+      root.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          close();
+          return;
+        }
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          next();
+          return;
+        }
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          prev();
+        }
+      });
       actionsBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         if (!story) return;
@@ -354,6 +374,7 @@
       } else {
         updateStoryContent();
         root.classList.add('is-open');
+        root.focus();
         document.documentElement.style.overflow = 'hidden';
         document.body.style.overflow = 'hidden';
         playItem(itemIndex);
@@ -1036,7 +1057,7 @@
       }
 
       if (!append && stories.length === 0) {
-        container.innerHTML = '<div style="padding:20px;text-align:center;color:#999;">Archive empty</div>';
+        container.innerHTML = `<div style="padding:20px;text-align:center;color:#999;">${t('archive_empty', 'Archive empty')}</div>`;
         container.dataset.archiveHasMore = '0';
         container.dataset.archiveLoading = '0';
         container.dataset.archivePage = '1';
@@ -1051,7 +1072,7 @@
     } catch (err) {
       console.error('Failed to load archived stories:', err);
       if (!append) {
-        container.innerHTML = '<div style="padding:20px;text-align:center;color:#999;">Failed to load archived stories</div>';
+      container.innerHTML = `<div style="padding:20px;text-align:center;color:#999;">${t('archive_load_failed', 'Failed to load archived stories')}</div>`;
       }
     } finally {
       container.dataset.archiveLoading = '0';
@@ -1255,7 +1276,7 @@
 
   function openComposer(file) {
     // Simple preview + confirm composer (MVP+)
-    const overlay = el('div', { class: 'koopo-stories__composer' });
+    const overlay = el('div', { class: 'koopo-stories__composer', role: 'dialog', 'aria-modal': 'true', tabindex: '-1' });
     const panel = el('div', { class: 'koopo-stories__composer-panel' });
     const title = el('div', { class: 'koopo-stories__composer-title', html: 'Post a story' });
 
@@ -1345,6 +1366,7 @@
     const postBtn = el('button', { class: 'koopo-stories__composer-post', type: 'button' });
     postBtn.textContent = 'Post';
     const status = el('div', { class: 'koopo-stories__composer-status', html: '' });
+    status.setAttribute('aria-live', 'polite');
 
     actions.appendChild(cancelBtn);
     actions.appendChild(postBtn);
@@ -1356,6 +1378,12 @@
 
     cancelBtn.addEventListener('click', close);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+      }
+    });
 
     postBtn.addEventListener('click', async () => {
       cancelBtn.disabled = true;
@@ -1410,6 +1438,7 @@
     panel.appendChild(status);
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
+    overlay.focus();
   }
 
   // Open modal to add a sticker
@@ -1760,7 +1789,10 @@
     }
     const overlay = el('div', {
       class: 'koopo-stories__composer',
-      style: 'z-index:9999999;background:rgba(0,0,0,0.45);'
+      style: 'z-index:9999999;background:rgba(0,0,0,0.45);',
+      role: 'dialog',
+      'aria-modal': 'true',
+      tabindex: '-1'
     });
 
     const panel = el('div', {
@@ -1768,11 +1800,11 @@
       style: 'max-width:360px;width:100%;'
     });
 
-    const title = el('div', { class: 'koopo-stories__composer-title', html: 'Story settings' });
+    const title = el('div', { class: 'koopo-stories__composer-title', html: t('story_settings', 'Story settings') });
 
     const privacyWrap = el('div', { class: 'koopo-stories__composer-privacy', style: 'border-top:0;' });
     const privacyLabel = el('label', { class: 'koopo-stories__composer-privacy-label' });
-    privacyLabel.textContent = 'Privacy';
+    privacyLabel.textContent = t('privacy_label', 'Privacy');
     const privacySelect = el('select', { class: 'koopo-stories__composer-privacy-select' });
     ['public', 'friends', 'close_friends'].forEach((val) => {
       const opt = el('option', { value: val });
@@ -1785,19 +1817,19 @@
 
     const actions = el('div', { class: 'koopo-stories__composer-actions' });
     const cancelBtn = el('button', { class: 'koopo-stories__composer-cancel', type: 'button' });
-    cancelBtn.textContent = 'Close';
+    cancelBtn.textContent = t('close', 'Close');
     const saveBtn = el('button', { class: 'koopo-stories__composer-post', type: 'button' });
-    saveBtn.textContent = 'Save';
+    saveBtn.textContent = t('save', 'Save');
     actions.appendChild(cancelBtn);
     actions.appendChild(saveBtn);
 
     const hideWrap = el('div', { style: 'padding:0 14px 14px 14px;border-top:1px solid rgba(255,255,255,.08);' });
     const hideTitle = el('div', { style: 'font-size:13px;font-weight:600;margin:10px 0 6px 0;' });
-    hideTitle.textContent = 'Hide from specific users';
+    hideTitle.textContent = t('hide_users_title', 'Hide from specific users');
     const hideInputWrap = el('div', { style: 'position:relative;' });
     const hideInput = el('input', {
       type: 'text',
-      placeholder: 'Search by username',
+      placeholder: t('search_username', 'Search by username'),
       style: 'width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:#1a1a1a;color:#fff;'
     });
     const hideInputSpinner = el('div', { class: 'koopo-stories__spinner koopo-stories__spinner--sm koopo-stories__input-spinner' });
@@ -1811,7 +1843,7 @@
       type: 'button',
       style: 'margin-top:8px;width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:#2a2a2a;color:#fff;font-weight:600;cursor:pointer;'
     });
-    hideAddBtn.textContent = 'Add to hidden list';
+    hideAddBtn.textContent = t('add_hidden', 'Add to hidden list');
     const hideAddSpinner = el('span', { class: 'koopo-stories__spinner koopo-stories__spinner--sm koopo-stories__btn-spinner' });
     hideAddBtn.appendChild(hideAddSpinner);
     const hiddenList = el('div', { style: 'margin-top:10px;display:flex;flex-direction:column;gap:6px;position:relative;min-height:20px;' });
@@ -1827,7 +1859,7 @@
       type: 'button',
       style: 'width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#ff6b6b;font-weight:600;cursor:pointer;'
     });
-    deleteBtn.textContent = 'Delete story';
+    deleteBtn.textContent = t('delete_story', 'Delete story');
     deleteWrap.appendChild(deleteBtn);
 
     const archiveWrap = el('div', { style: 'padding:0 14px 14px 14px;' });
@@ -1836,7 +1868,7 @@
       style: 'width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#fff;font-weight:600;cursor:pointer;'
     });
     const isArchived = !!storyData.is_archived;
-    archiveBtn.textContent = isArchived ? 'Unarchive story' : 'Archive story';
+    archiveBtn.textContent = isArchived ? t('unarchive_story', 'Unarchive story') : t('archive_story', 'Archive story');
     archiveWrap.appendChild(archiveBtn);
 
     const closeModal = (resume = true) => {
@@ -1847,6 +1879,12 @@
     cancelBtn.onclick = () => closeModal(true);
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) closeModal(true);
+    });
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeModal(true);
+      }
     });
 
     saveBtn.onclick = async () => {
@@ -1942,7 +1980,7 @@
       hiddenListSpinner.style.display = 'none';
       if (!users.length) {
         const empty = el('div', { style: 'font-size:12px;opacity:0.7;' });
-        empty.textContent = 'No hidden users yet.';
+        empty.textContent = t('no_hidden_users', 'No hidden users yet.');
         hiddenList.appendChild(empty);
         return;
       }
@@ -1955,7 +1993,7 @@
           type: 'button',
           style: 'padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.2);background:#222;color:#fff;font-size:12px;cursor:pointer;'
         });
-        removeBtn.textContent = 'Remove';
+        removeBtn.textContent = t('remove', 'Remove');
         removeBtn.onclick = async () => {
           removeBtn.disabled = true;
           try {
@@ -1964,7 +2002,7 @@
             await loadHiddenUsers();
           } catch (err) {
             console.error('Failed to remove hidden user:', err);
-            alert('Failed to remove user. Please try again.');
+            alert(t('remove_hidden_failed', 'Failed to remove user. Please try again.'));
           } finally {
             removeBtn.disabled = false;
           }
@@ -2041,7 +2079,7 @@
         uid = parseInt(hideInput.value.trim(), 10);
       }
       if (!uid) {
-        alert('Select a user to hide.');
+        alert(t('select_user_hide', 'Select a user to hide.'));
         return;
       }
       hideAddBtn.disabled = true;
@@ -2054,7 +2092,7 @@
         await loadHiddenUsers();
       } catch (err) {
         console.error('Failed to hide user:', err);
-        alert('Failed to hide user. Please try again.');
+        alert(t('hide_user_failed', 'Failed to hide user. Please try again.'));
       } finally {
         hideAddBtn.disabled = false;
         hideAddSpinner.style.display = 'none';
@@ -2069,6 +2107,7 @@
     panel.appendChild(deleteWrap);
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
+    overlay.focus();
 
     loadHiddenUsers();
   }
@@ -2080,7 +2119,10 @@
 
     const overlay = el('div', {
       class: 'koopo-stories__composer',
-      style: 'z-index:9999999;background:rgba(0,0,0,0.3);'
+      style: 'z-index:9999999;background:rgba(0,0,0,0.3);',
+      role: 'dialog',
+      'aria-modal': 'true',
+      tabindex: '-1'
     });
 
     const picker = el('div', {
@@ -2143,6 +2185,7 @@
     };
     overlay.appendChild(picker);
     document.body.appendChild(overlay);
+    overlay.focus();
 
     // Center the picker
     requestAnimationFrame(() => {
@@ -2155,7 +2198,7 @@
 
   // Show reply modal
   function showReplyModal(storyId, author) {
-    const overlay = el('div', { class: 'koopo-stories__composer', style: 'z-index:9999999;' });
+    const overlay = el('div', { class: 'koopo-stories__composer', style: 'z-index:9999999;', role: 'dialog', 'aria-modal': 'true', tabindex: '-1' });
     const panel = el('div', { class: 'koopo-stories__composer-panel' });
     const title = el('div', { class: 'koopo-stories__composer-title' });
     title.textContent = `Reply to ${author?.name || 'this story'}`;
@@ -2172,6 +2215,7 @@
     sendBtn.textContent = 'Send';
 
     const status = el('div', { class: 'koopo-stories__composer-status' });
+    status.setAttribute('aria-live', 'polite');
 
     const close = () => {
       overlay.remove();
@@ -2180,6 +2224,12 @@
 
     cancelBtn.addEventListener('click', close);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+      }
+    });
 
     sendBtn.addEventListener('click', async () => {
       const message = textarea.value.trim();
@@ -2215,6 +2265,7 @@
     panel.appendChild(status);
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
+    overlay.focus();
 
     // Focus textarea
     setTimeout(() => textarea.focus(), 100);
@@ -2222,7 +2273,7 @@
 
   // Show report modal
   function showReportModal(storyId, author) {
-    const overlay = el('div', { class: 'koopo-stories__composer', style: 'z-index:9999999;' });
+    const overlay = el('div', { class: 'koopo-stories__composer', style: 'z-index:9999999;', role: 'dialog', 'aria-modal': 'true', tabindex: '-1' });
     const panel = el('div', { class: 'koopo-stories__composer-panel' });
     const title = el('div', { class: 'koopo-stories__composer-title' });
     title.textContent = `Report ${author?.name || 'this story'}`;
@@ -2267,11 +2318,18 @@
     submitBtn.textContent = 'Submit Report';
 
     const status = el('div', { class: 'koopo-stories__composer-status' });
+    status.setAttribute('aria-live', 'polite');
 
     const close = () => overlay.remove();
 
     cancelBtn.addEventListener('click', close);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+      }
+    });
 
     submitBtn.addEventListener('click', async () => {
       submitBtn.disabled = true;
@@ -2301,6 +2359,7 @@
     panel.appendChild(status);
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
+    overlay.focus();
   }
 
   // Show viewer list modal

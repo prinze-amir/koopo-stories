@@ -144,6 +144,26 @@ final class Koopo_Stories_Module {
             'me'      => $current_user_id,
             'meAvatar' => get_avatar_url($current_user_id, [ 'size' => 96 ]),
         ]);
+
+        wp_localize_script('koopo-stories', 'KoopoStoriesI18n', [
+            'archive_empty' => __('Archive empty', 'koopo'),
+            'archive_load_failed' => __('Failed to load archived stories', 'koopo'),
+            'story_settings' => __('Story settings', 'koopo'),
+            'privacy_label' => __('Privacy', 'koopo'),
+            'close' => __('Close', 'koopo'),
+            'save' => __('Save', 'koopo'),
+            'hide_users_title' => __('Hide from specific users', 'koopo'),
+            'search_username' => __('Search by username', 'koopo'),
+            'add_hidden' => __('Add to hidden list', 'koopo'),
+            'no_hidden_users' => __('No hidden users yet.', 'koopo'),
+            'remove' => __('Remove', 'koopo'),
+            'remove_hidden_failed' => __('Failed to remove user. Please try again.', 'koopo'),
+            'select_user_hide' => __('Select a user to hide.', 'koopo'),
+            'hide_user_failed' => __('Failed to hide user. Please try again.', 'koopo'),
+            'delete_story' => __('Delete story', 'koopo'),
+            'archive_story' => __('Archive story', 'koopo'),
+            'unarchive_story' => __('Unarchive story', 'koopo'),
+        ]);
     }
 
     public function render_activity_tray() : void {

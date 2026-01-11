@@ -285,6 +285,91 @@ Here is the **official project roadmap** for the Stories feature, aligned to com
 
 👉 **Commit:** 035 (v1.0)
 
+**Progress:** Security review ✅, Back-compat testing 🔄, Release notes ✅, Documentation ✅
+
+---
+
+## 🧾 Release Notes (v1.0 candidate)
+
+- Privacy controls: public/friends/close friends with per-story hide list.
+- Close friends UI + REST management.
+- Reactions, replies, reporting, and moderation queue.
+- Stickers: mentions, links, locations, polls + voting.
+- Story analytics: views, viewers list, reaction counts.
+- Story settings: privacy edit, delete, archive/unarchive.
+- Archive tray + infinite scroll.
+- Mobile optimizations: compact payloads + lazy loaded thumbnails.
+- Security: upload validation, rate limits, and visibility checks.
+
+---
+
+## 📚 Documentation Notes
+
+- Shortcodes:
+  - `[koopo_stories_widget]` for trays (friends/following/all).
+  - `[koopo_stories_archive]` for archived stories.
+  - `[koopo_close_friends_manager]` for close friends UI.
+- REST:
+  - Feed: `/wp-json/koopo/v1/stories`
+  - Story: `/wp-json/koopo/v1/stories/{id}`
+  - Archive: `/wp-json/koopo/v1/stories/archive`
+  - `compact=1` for mobile payloads
+- Admin tools:
+  - Back-compat tools in Stories Settings (privacy migration + orphan cleanup).
+  - Rate-limit settings (reactions/replies/reports).
+
+---
+
+## ✅ Full Release Checklist
+
+**Security & Permissions**
+- Verify REST endpoints enforce `must_be_logged_in` or `can_moderate` as appropriate.
+- Confirm story visibility checks for reactions, replies, reports, poll votes.
+- Validate upload limits + allowed MIME types in production.
+
+**Back-Compat**
+- Run privacy migration (`connections` → `friends`) if legacy data exists.
+- Run orphan cleanup for story items with missing attachments.
+- Verify legacy stories load without `media_type` set.
+
+**Performance**
+- Confirm feed cache invalidation on create/update/delete/hide/seen.
+- Validate query load on feed (no per-story item queries).
+- Confirm lazy loading works for tray + archive thumbs.
+
+**UX / QA**
+- Story viewer navigation (tap/hold, next/prev, skip users).
+- Reactions and replies on desktop + mobile.
+- Sticker drag on mobile and sticker render in viewer.
+- Archive tray infinite scroll and empty state.
+- Story settings (privacy edit, hide list, archive, delete).
+
+**Moderation**
+- Reporting UI submits + moderation queue actions work.
+- Auto-hide threshold behaves correctly.
+
+**Release Prep**
+- Bump plugin version (`koopo-stories.php`) if needed.
+- Rebuild/minify assets if your build pipeline requires it.
+- Update any environment-specific settings.
+
+---
+
+## ⚡ Performance / Structure Improvements (Recommended)
+
+**Performance**
+- Reduce per-story meta lookups in feed by batching meta fetches (privacy, expires, cover thumb).
+- Consider caching unseen counts per user/story group for short TTLs on large feeds.
+- Keep feed payload minimal; fetch full item details only on viewer open.
+- Ensure cache key builder includes all query params to avoid stale variants.
+
+**Structure**
+- Split `includes/class-stories-rest.php` into focused REST controllers:
+  - feed/archive, story CRUD, engagement, stickers
+- Move shared helpers (privacy normalization, rate limiting, cache keys, upload guard) into a `class-stories-utils.php`.
+- Modularize `assets/stories.js` into viewer/composer/settings/archive/api modules.
+- Organize `assets/stories.css` by component sections and remove stray rules.
+
 ---
 
 ## Process change (important)

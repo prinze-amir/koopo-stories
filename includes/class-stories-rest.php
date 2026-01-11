@@ -13,6 +13,32 @@ class Koopo_Stories_REST {
         update_option('koopo_stories_feed_global_salt', (string) time(), false);
     }
 
+    private static function rate_limit( string $action, int $user_id, int $max, int $window ) : bool {
+        if ( $user_id <= 0 || $max <= 0 || $window <= 0 ) return true;
+        $key = 'koopo_stories_rl_' . $action . '_' . $user_id;
+        $state = get_transient($key);
+        $now = time();
+
+        if ( ! is_array($state) || empty($state['reset']) || $state['reset'] <= $now ) {
+            set_transient($key, [ 'count' => 1, 'reset' => $now + $window ], $window);
+            return true;
+        }
+
+        if ( (int) $state['count'] >= $max ) {
+            return false;
+        }
+
+        $state['count'] = (int) $state['count'] + 1;
+        set_transient($key, $state, $state['reset'] - $now);
+        return true;
+    }
+
+    private static function normalize_privacy( $privacy ) : string {
+        if ( empty($privacy) ) return 'friends';
+        if ( $privacy === 'connections' ) return 'friends';
+        return $privacy;
+    }
+
     public static function register_routes() : void {
         register_rest_route( Koopo_Stories_Module::REST_NS, '/stories', [
             [
@@ -493,8 +519,7 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             }
 
             // Update privacy if this story is more restrictive
-            $privacy = get_post_meta($sid, 'privacy', true);
-            if ( empty($privacy) ) $privacy = 'friends';
+            $privacy = self::normalize_privacy(get_post_meta($sid, 'privacy', true));
             $privacy_rank = [
                 'public' => 0,
                 'friends' => 1,
@@ -633,7 +658,12 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             $item_id = (int) $item->ID;
             $attachment_id = (int) get_post_meta($item_id, 'attachment_id', true);
             $type = get_post_meta($item_id, 'media_type', true);
-            $type = ($type === 'video') ? 'video' : 'image';
+            if ( empty($type) && $attachment_id ) {
+                $mime_guess = get_post_mime_type($attachment_id);
+                $type = (is_string($mime_guess) && strpos($mime_guess, 'video/') === 0) ? 'video' : 'image';
+            } else {
+                $type = ($type === 'video') ? 'video' : 'image';
+            }
             $src = $attachment_id ? wp_get_attachment_url($attachment_id) : '';
             $thumb = '';
             if ( $attachment_id ) {
@@ -642,6 +672,9 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             }
             $duration = (int) get_post_meta($item_id, 'duration_ms', true);
             if ( $duration <= 0 && $type === 'image' ) $duration = 5000;
+            if ( empty($src) ) {
+                continue;
+            }
 
             $items_out[] = [
                 'item_id' => $item_id,
@@ -663,8 +696,7 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             $profile_url = bp_core_get_user_domain($author_id);
         }
 
-        $privacy = get_post_meta($story_id, 'privacy', true);
-        if ( empty($privacy) ) $privacy = 'friends';
+        $privacy = self::normalize_privacy(get_post_meta($story_id, 'privacy', true));
         $is_archived = (int) get_post_meta($story_id, 'is_archived', true) === 1;
 
         // Get view counts
@@ -927,8 +959,7 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
                 }
             }
 
-            $privacy = get_post_meta($sid, 'privacy', true);
-            if ( empty($privacy) ) $privacy = 'friends';
+            $privacy = self::normalize_privacy(get_post_meta($sid, 'privacy', true));
 
             $out[] = [
                 'story_id' => $sid,
@@ -1079,7 +1110,33 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             ], 400);
         }
 
+        $max_mb = (int) get_option('koopo_stories_max_upload_size_mb', 50);
+        if ( $max_mb < 1 ) $max_mb = 1;
+        $max_bytes = $max_mb * MB_IN_BYTES;
+        $size = isset($_FILES['file']['size']) ? (int) $_FILES['file']['size'] : 0;
+        if ( $size > 0 && $size > $max_bytes ) {
+            return new WP_REST_Response([
+                'error' => 'file_too_large',
+                'message' => 'File exceeds the allowed size.',
+                'max_upload_bytes' => $max_bytes,
+            ], 400);
+        }
+
+        $allowed_images = (array) get_option('koopo_stories_allowed_image_mimes', ['image/jpeg','image/png','image/webp']);
+        $allowed_videos = (array) get_option('koopo_stories_allowed_video_mimes', ['video/mp4','video/webm']);
+        $allowed_mimes = array_values(array_unique(array_merge($allowed_images, $allowed_videos)));
+
         require_once ABSPATH . 'wp-admin/includes/file.php';
+        $filetype = wp_check_filetype_and_ext($_FILES['file']['tmp_name'], $_FILES['file']['name']);
+        $mime = $filetype['type'] ?? '';
+        if ( empty($mime) || ! in_array($mime, $allowed_mimes, true) ) {
+            return new WP_REST_Response([
+                'error' => 'invalid_file_type',
+                'message' => 'File type not allowed.',
+                'allowed_mimes' => $allowed_mimes,
+            ], 400);
+        }
+
         require_once ABSPATH . 'wp-admin/includes/media.php';
         require_once ABSPATH . 'wp-admin/includes/image.php';
 
@@ -1339,6 +1396,11 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
         $item_id = $req->get_param('item_id') ? (int) $req->get_param('item_id') : null;
         $reaction = $req->get_param('reaction');
 
+        $limit_reactions = (int) get_option('koopo_stories_rate_limit_reactions', 200);
+        if ( $limit_reactions > 0 && ! self::rate_limit('reaction', $user_id, $limit_reactions, HOUR_IN_SECONDS) ) {
+            return new WP_REST_Response([ 'error' => 'rate_limited' ], 429);
+        }
+
         if ( ! Koopo_Stories_Permissions::can_view_story($story_id, $user_id) ) {
             return new WP_REST_Response(['error' => 'forbidden'], 403);
         }
@@ -1430,6 +1492,11 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
         $item_id = $req->get_param('item_id') ? (int) $req->get_param('item_id') : null;
         $message = $req->get_param('message');
         $is_dm = $req->get_param('is_dm') !== '0'; // Default to true (DM)
+
+        $limit_replies = (int) get_option('koopo_stories_rate_limit_replies', 60);
+        if ( $limit_replies > 0 && ! self::rate_limit('reply', $user_id, $limit_replies, HOUR_IN_SECONDS) ) {
+            return new WP_REST_Response([ 'error' => 'rate_limited' ], 429);
+        }
 
         if ( ! Koopo_Stories_Permissions::can_view_story($story_id, $user_id) ) {
             return new WP_REST_Response(['error' => 'forbidden'], 403);
@@ -1708,6 +1775,15 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
             return new WP_REST_Response([ 'error' => 'cannot_report_own_story' ], 400);
         }
 
+        if ( ! Koopo_Stories_Permissions::can_view_story($story_id, $user_id) ) {
+            return new WP_REST_Response([ 'error' => 'forbidden' ], 403);
+        }
+
+        $limit_reports = (int) get_option('koopo_stories_rate_limit_reports', 10);
+        if ( $limit_reports > 0 && ! self::rate_limit('report', $user_id, $limit_reports, HOUR_IN_SECONDS) ) {
+            return new WP_REST_Response([ 'error' => 'rate_limited' ], 429);
+        }
+
         $reason = sanitize_text_field( $req->get_param('reason') ?: 'other' );
         $description = sanitize_textarea_field( $req->get_param('description') ?: '' );
 
@@ -1888,6 +1964,17 @@ if ( $max_items_per_story < 0 ) $max_items_per_story = 0;
         $user_id = get_current_user_id();
         $sticker_id = (int) $req['sticker_id'];
         $option_index = (int) $req->get_param('option_index');
+
+        global $wpdb;
+        $table = $wpdb->prefix . Koopo_Stories_Stickers::TABLE_NAME;
+        $story_id = (int) $wpdb->get_var( $wpdb->prepare(
+            "SELECT story_id FROM `{$table}` WHERE id = %d",
+            $sticker_id
+        ) );
+
+        if ( $story_id <= 0 || ! Koopo_Stories_Permissions::can_view_story($story_id, $user_id) ) {
+            return new WP_REST_Response(['error' => 'forbidden'], 403);
+        }
 
         $result = Koopo_Stories_Stickers::vote_poll($sticker_id, $user_id, $option_index);
 
