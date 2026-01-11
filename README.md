@@ -355,23 +355,6 @@ Here is the **official project roadmap** for the Stories feature, aligned to com
 
 ---
 
-## ⚡ Performance / Structure Improvements (Recommended)
-
-**Performance**
-- Reduce per-story meta lookups in feed by batching meta fetches (privacy, expires, cover thumb).
-- Consider caching unseen counts per user/story group for short TTLs on large feeds.
-- Keep feed payload minimal; fetch full item details only on viewer open.
-- Ensure cache key builder includes all query params to avoid stale variants.
-
-**Structure**
-- Split `includes/class-stories-rest.php` into focused REST controllers:
-  - feed/archive, story CRUD, engagement, stickers
-- Move shared helpers (privacy normalization, rate limiting, cache keys, upload guard) into a `class-stories-utils.php`.
-- Modularize `assets/stories.js` into viewer/composer/settings/archive/api modules.
-- Organize `assets/stories.css` by component sections and remove stray rules.
-
----
-
 ## Process change (important)
 
 Starting **Commit 004**, every commit will include:
@@ -402,7 +385,7 @@ Phase 0 complete, moving to Phase 9
 | **Privacy** |
 | Public/Friends toggle | ✅ | ✅ | ✅ Complete |
 | Close friends list | ✅ | ✅ | ✅ Complete |
-| Hide from specific users | ✅ | ✅ | ⏸️ Deferred |
+| Hide from specific users | ✅ | ✅ | ⏸️ complete |
 | Story archive | ✅ | ✅ | ⏸️ Deferred |
 | **Engagement** |
 | Reactions/Likes | ✅ | ✅ | ✅ Complete |
@@ -410,10 +393,10 @@ Phase 0 complete, moving to Phase 9
 | View counts | ✅ | ✅ | ✅ Complete |
 | Viewer list | ✅ | ✅ | ✅ Complete |
 | **Interactive** |
-| Mentions | ✅ | ✅ | 🔄 Phase 11 |
-| Link stickers | ✅ | ✅ | 🔄 Phase 11 |
-| Location tags | ✅ | ✅ | 🔄 Phase 11 |
-| Polls | ✅ | ✅ | 🔄 Phase 11 |
+| Mentions | ✅ | ✅ | ✅ Complete |
+| Link stickers | ✅ | ✅ | ✅ Complete |
+| Location tags | ✅ | ✅ | ✅ Complete |
+| Polls | ✅ | ✅ | ✅ Complete|
 | **Platform** |
 | Web support | ✅ | ✅ | ✅ Complete |
 | Mobile app API | ✅ | ✅ | 🔄 Phase 15 |
@@ -462,3 +445,35 @@ Phase 0 complete, moving to Phase 9
   - `koopo_stories_story_created` (story_id, item_id, user_id)
   - `koopo_stories_reaction_added` (story_id, user_id, reaction, item_id)
   - `koopo_stories_reply_added` (story_id, user_id, reply_id, item_id, is_dm)
+
+---
+
+## ⚡ Performance / Structure Improvements (Recommended)
+
+### Findings (Ordered by Severity)
+
+- **High**: Duplicate per‑request logic (upload limits, duration, max items) is copy‑pasted across endpoints. Extract shared helpers to avoid divergence. `includes/class-stories-rest.php`
+- **High**: Feed building still does per‑story meta calls (privacy, expires, cover thumb, author profile URL). Batch meta/authors or reduce default payload. `includes/class-stories-rest.php`
+- **Medium**: Frontend logic is monolithic and mixes UI/data/interaction. Split into viewer/composer/settings/archive modules. `assets/stories.js`
+- **Medium**: CSS is monolithic with leftover rules; split by component or at least regroup sections. `assets/stories.css`
+- **Low**: Cache key doesn’t include all potential query params; use a centralized key builder. `includes/class-stories-rest.php`
+- **Low**: `compact=1` applied to all GET requests on mobile; consider per‑call opt‑in for future endpoints. `assets/stories.js`
+
+### Performance Improvements (Ideas)
+
+- Batch story meta and author lookups in feed.
+- Keep tray payload minimal; fetch full item details only on viewer open.
+- Use `fields => 'ids'` where possible for leaner queries.
+- Cache unseen counts per user/story group with short TTL.
+- Load stickers lazily or via a dedicated endpoint for heavy stories.
+
+### Refactoring / Structure Suggestions
+
+- **Split REST controllers**:
+  - `class-stories-rest-feed.php` (feed + archive)
+  - `class-stories-rest-story.php` (get/update/delete/create)
+  - `class-stories-rest-engagement.php` (reactions/replies/report)
+  - `class-stories-rest-stickers.php` (stickers + poll vote)
+- **Shared helpers**: move privacy normalization, rate limit, cache key, upload guard into `class-stories-utils.php`.
+- **Frontend modularization**: split `assets/stories.js` into `viewer.js`, `composer.js`, `settings.js`, `archive.js`, `api.js`.
+- **CSS organization**: group by component or split into viewer/composer/archive files; remove orphaned rules.
