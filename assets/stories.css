@@ -22,6 +22,8 @@
 .koopo-stories__header{display:flex;align-items:center;gap:10px;margin-top:10px}
 .koopo-stories__header img{width:32px;height:32px;}
 .koopo-stories__avatar-link img {width:45px;height:45px;border-radius:999px;}
+.koopo-stories__avatar-skeleton{background:#2a2a2a;position:relative;overflow:hidden;}
+.koopo-stories__avatar-skeleton::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,0.35) 50%,rgba(255,255,255,0) 100%);transform:translateX(-100%);animation:koopo-skeleton 1.2s ease-in-out infinite;}
 .koopo-stories__avatar-link{display:block;line-height:0;text-decoration:none;transition:opacity .2s}
 .koopo-stories__avatar-link:hover{opacity:.85}
 .koopo-stories__close{margin-left:auto;background:transparent;border:0;color:#fff;font-size:20px;cursor:pointer}

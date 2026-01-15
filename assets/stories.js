@@ -201,6 +201,44 @@
     return scriptCache[src];
   }
 
+  const storyCache = new Map();
+  function fetchStoryCached(storyId) {
+    const key = String(storyId || '');
+    if (!key) return Promise.reject(new Error('Missing story id'));
+    const cached = storyCache.get(key);
+    if (cached) {
+      return cached instanceof Promise ? cached : Promise.resolve(cached);
+    }
+    const promise = apiGet(`${API_BASE}/${key}`)
+      .then((data) => {
+        storyCache.set(key, data);
+        return data;
+      })
+      .catch((err) => {
+        storyCache.delete(key);
+        throw err;
+      });
+    storyCache.set(key, promise);
+    return promise;
+  }
+
+  function prefetchStoryData(storyData) {
+    if (!storyData) return;
+    if (Array.isArray(storyData.story_ids) && storyData.story_ids.length > 1) {
+      storyData.story_ids.forEach((sid) => fetchStoryCached(sid).catch(() => {}));
+    } else if (storyData.story_id) {
+      fetchStoryCached(storyData.story_id).catch(() => {});
+    }
+  }
+
+  function prefetchAdjacentStories(list, index) {
+    if (!Array.isArray(list) || list.length === 0) return;
+    const next = list[index + 1];
+    const prev = list[index - 1];
+    if (next) prefetchStoryData(next);
+    if (prev) prefetchStoryData(prev);
+  }
+
   function ensureModule(name, srcKey) {
     const modules = window.KoopoStoriesModules || {};
     if (modules[name]) return Promise.resolve(modules[name]);
@@ -228,7 +266,7 @@
 
     if (clickedStoryData && clickedStoryData.story_ids && clickedStoryData.story_ids.length > 1) {
       try {
-        const storyPromises = clickedStoryData.story_ids.map(sid => apiGet(`${API_BASE}/${sid}`));
+        const storyPromises = clickedStoryData.story_ids.map(sid => fetchStoryCached(sid));
         const authorStories = await Promise.all(storyPromises);
 
         const combinedStory = {
@@ -267,6 +305,7 @@
           throw new Error('Story content unavailable.');
         }
         viewer.open(combinedStory, allStoriesInTray, clickedIndex >= 0 ? clickedIndex : 0);
+        prefetchAdjacentStories(allStoriesInTray, clickedIndex);
         return true;
       } catch (err) {
         console.error('Failed to load author stories:', err);
@@ -275,11 +314,12 @@
     }
 
     try {
-      const story = await apiGet(`${API_BASE}/${storyId}`);
+      const story = await fetchStoryCached(storyId);
       if (!story.items || story.items.length === 0) {
         throw new Error('Story content unavailable.');
       }
       viewer.open(story, allStoriesInTray, clickedIndex >= 0 ? clickedIndex : 0);
+      prefetchAdjacentStories(allStoriesInTray, clickedIndex);
       return true;
     } catch (err) {
       console.error('Failed to load story:', err);
@@ -343,13 +383,25 @@
     return loadTray(container).catch(()=>{});
   }
 
-  function openStoryFromUrl(container) {
-    if (container.dataset.koopoStoryOpened === '1') return;
+  let openedFromUrl = false;
+
+  async function openStoryFromUrl(container) {
+    if (openedFromUrl || container.dataset.koopoStoryOpened === '1') return;
     const params = new URLSearchParams(window.location.search || '');
     const storyId = params.get('koopo_story');
     if (!storyId) return;
+    openedFromUrl = true;
     container.dataset.koopoStoryOpened = '1';
-    openStoryFromTray(storyId, container);
+    try {
+      const viewer = await ensureViewer();
+      if (viewer.openLoading) viewer.openLoading();
+      const story = await fetchStoryCached(storyId);
+      if (!story.items || story.items.length === 0) throw new Error('Story content unavailable.');
+      viewer.open(story, [], 0);
+    } catch (err) {
+      console.error('Failed to open story from URL:', err);
+      showToast('Story content unavailable.');
+    }
   }
 
   async function loadArchiveTray(container, opts = {}) {
@@ -500,6 +552,8 @@
           .catch(err => console.error('Failed to load composer:', err));
       });
     } else {
+      b.addEventListener('pointerenter', () => prefetchStoryData(s), { passive: true });
+      b.addEventListener('touchstart', () => prefetchStoryData(s), { passive: true });
       b.addEventListener('click', async () => {
         const storyId = b.getAttribute('data-story-id');
         if (!storyId) return;
@@ -587,7 +641,10 @@
 
   function init() {
     const nodes = document.querySelectorAll('.koopo-stories');
-    nodes.forEach(n => refreshTray(n));
+    nodes.forEach(n => {
+      openStoryFromUrl(n);
+      refreshTray(n);
+    });
     initArchiveInfiniteScroll();
   }
 

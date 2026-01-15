@@ -14,7 +14,7 @@
 
   // Viewer singleton
   const Viewer = (() => {
-    let root, barsWrap, headerAvatar, headerName, headerTime, closeBtn, reportBtn, stage, tapPrev, tapNext, headerAvatarLink, viewCount, reactionCount, muteBtn, actionsBtn;
+    let root, barsWrap, headerAvatar, headerName, headerTime, closeBtn, reportBtn, stage, tapPrev, tapNext, headerAvatarLink, viewCount, reactionCount, muteBtn, actionsBtn, loadingOverlay;
     let bottomBar, reactionBtn, replyBtn;
     let story = null;
     let allStories = [];  // All available stories in the tray
@@ -35,6 +35,14 @@
       barsWrap = el('div', { class: 'koopo-stories__progress' });
       headerAvatar = el('img', { src: '' });
       headerAvatarLink = el('a', { href: '#', class: 'koopo-stories__avatar-link' }, [headerAvatar]);
+      headerAvatar.onerror = () => {
+        headerAvatar.removeAttribute('src');
+        headerAvatar.classList.add('koopo-stories__avatar-skeleton');
+      };
+      headerAvatar.onload = () => {
+        headerAvatar.classList.remove('koopo-stories__avatar-skeleton');
+        headerAvatar.style.opacity = '1';
+      };
       headerName = el('div', { class: 'koopo-stories__who', html: '' });
       headerTime = el('div', { class: 'koopo-stories__who-time', style: 'font-size:11px;opacity:0.7;margin-top:2px;' });
 
@@ -59,7 +67,7 @@
       stage = el('div', { class: 'koopo-stories__stage' });
 
       // Add loading overlay
-      const loadingOverlay = el('div', { class: 'koopo-stories__loader', style: 'display:none;' });
+      loadingOverlay = el('div', { class: 'koopo-stories__loader', style: 'display:none;' });
       const spinner = el('div', { class: 'koopo-stories__spinner' });
       loadingOverlay.appendChild(spinner);
       stage.appendChild(loadingOverlay);
@@ -186,12 +194,15 @@
       root.focus();
       document.documentElement.style.overflow = 'hidden';
       document.body.style.overflow = 'hidden';
+      if (loadingOverlay) loadingOverlay.style.display = 'none';
 
       // Update header
       headerAvatar.src = story.author?.avatar || '';
       headerName.innerHTML = story.author?.name || '';
       headerTime.textContent = story.posted_at_human || '';
       headerAvatarLink.href = story.author?.profile_url || '#';
+      headerAvatar.style.opacity = '1';
+      headerAvatar.classList.remove('koopo-stories__avatar-skeleton');
 
       // Update avatar flip animation if author changed
       if (previousAuthorId && previousAuthorId !== story.author?.id) {
@@ -217,6 +228,34 @@
 
       buildBars(items.length);
       playItem(itemIndex);
+    }
+
+    function openLoading() {
+      ensure();
+      paused = true;
+      story = { items: [] };
+      allStories = [];
+      currentStoryIndex = 0;
+      itemIndex = 0;
+
+      root.classList.add('is-open');
+      root.focus();
+      document.documentElement.style.overflow = 'hidden';
+      document.body.style.overflow = 'hidden';
+      barsWrap.innerHTML = '';
+      stage.querySelectorAll('.koopo-stories__media').forEach(n => n.remove());
+      if (loadingOverlay) loadingOverlay.style.display = 'flex';
+      headerName.innerHTML = 'Loading...';
+      headerTime.textContent = '';
+      headerAvatar.removeAttribute('src');
+      headerAvatar.style.opacity = '0';
+      headerAvatar.classList.add('koopo-stories__avatar-skeleton');
+      viewCount.style.display = 'none';
+      reactionCount.style.display = 'none';
+      reactionBtn.style.display = 'none';
+      replyBtn.style.display = 'none';
+      reportBtn.style.display = 'none';
+      actionsBtn.style.display = 'none';
     }
 
     function close() {
@@ -740,7 +779,7 @@
       return pollContainer;
     }
 
-    return { open, close, resumeStory, currentItemStoryId, currentItemId, launchReactionEffect, holdForReaction };
+    return { open, openLoading, close, resumeStory, currentItemStoryId, currentItemId, launchReactionEffect, holdForReaction };
   })();
 
   function storyIdsForActions(storyData) {
