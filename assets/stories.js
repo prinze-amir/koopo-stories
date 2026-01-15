@@ -81,885 +81,211 @@
     return node;
   }
 
-  // Viewer singleton
-  const Viewer = (() => {
-    let root, barsWrap, headerAvatar, headerName, closeBtn, reportBtn, stage, tapPrev, tapNext, headerAvatarLink, viewCount, reactionCount, muteBtn, actionsBtn;
-    let bottomBar, reactionBtn, replyBtn;
-    let story = null;
-    let allStories = [];  // All available stories in the tray
-    let currentStoryIndex = 0;  // Index in allStories array
-    let itemIndex = 0;
-    let raf = null;
-    let startTs = 0;
-    let duration = 5000;
-    let paused = false;
-    let isMuted = true;
-    let previousAuthorId = null;  // Track previous author for flip animation
-
-    function ensure() {
-      if (root) return;
-      barsWrap = el('div', { class: 'koopo-stories__progress' });
-      headerAvatar = el('img', { src: '' });
-      headerAvatarLink = el('a', { href: '#', class: 'koopo-stories__avatar-link' }, [headerAvatar]);
-      headerName = el('div', { class: 'koopo-stories__who', html: '' });
-
-      // Stats container (views and reactions)
-      const statsWrap = el('div', { style: 'margin-left:auto;display:flex;gap:12px;align-items:center;' });
-      viewCount = el('div', { class: 'koopo-stories__view-count', style: 'font-size:12px;opacity:0.8;cursor:pointer;', html: '' });
-      reactionCount = el('div', { class: 'koopo-stories__reaction-count', style: 'font-size:12px;opacity:0.8;', html: '' });
-      statsWrap.appendChild(viewCount);
-      statsWrap.appendChild(reactionCount);
-
-      muteBtn = el('button', { class: 'koopo-stories__mute', type: 'button', style: 'background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:0 10px;opacity:0.7;', title: 'Toggle sound', 'aria-label': 'Toggle sound' });
-      muteBtn.textContent = '🔇';
-      reportBtn = el('button', { class: 'koopo-stories__report', type: 'button', style: 'background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:0 10px;opacity:0.7;', title: 'Report this story', 'aria-label': 'Report this story' });
-      reportBtn.textContent = '⚠';
-      actionsBtn = el('button', { class: 'koopo-stories__actions', type: 'button', style: 'background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:0 8px;opacity:0.8;', title: 'Story options', 'aria-label': 'Story options' });
-      actionsBtn.textContent = '. . .';
-      closeBtn = el('button', { class: 'koopo-stories__close', type: 'button', 'aria-label': 'Close story viewer' }, []);
-      closeBtn.textContent = 'X';
-      const header = el('div', { class: 'koopo-stories__header' }, [headerAvatarLink, headerName, statsWrap, muteBtn, reportBtn, actionsBtn, closeBtn]);
-
-      stage = el('div', { class: 'koopo-stories__stage' });
-
-      // Add loading overlay
-      const loadingOverlay = el('div', { class: 'koopo-stories__loader', style: 'display:none;' });
-      const spinner = el('div', { class: 'koopo-stories__spinner' });
-      loadingOverlay.appendChild(spinner);
-      stage.appendChild(loadingOverlay);
-
-      tapPrev = el('div', { class: 'koopo-stories__tap koopo-stories__tap--prev' });
-      tapNext = el('div', { class: 'koopo-stories__tap koopo-stories__tap--next' });
-      stage.appendChild(tapPrev);
-      stage.appendChild(tapNext);
-
-      // Bottom bar with reaction and reply buttons
-      reactionBtn = el('button', {
-        class: 'koopo-stories__action-btn',
-        style: 'background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:8px 16px;',
-        'aria-label': 'React to story',
-        type: 'button'
-      });
-      reactionBtn.textContent = '❤️';
-
-      replyBtn = el('button', {
-        class: 'koopo-stories__action-btn',
-        style: 'background:none;border:none;color:#fff;font-size:16px;cursor:pointer;padding:8px 16px;',
-        'aria-label': 'Reply to story',
-        type: 'button'
-      });
-      replyBtn.textContent = '💬 Reply';
-
-      bottomBar = el('div', {
-        class: 'koopo-stories__viewer-bottom',
-        style: 'padding:12px;display:flex;gap:12px;justify-content:center;align-items:center;'
-      }, [reactionBtn, replyBtn]);
-
-      const top = el('div', { class: 'koopo-stories__viewer-top' }, [barsWrap, header]);
-      root = el('div', { class: 'koopo-stories__viewer', role: 'dialog', 'aria-modal': 'true', tabindex: '0' }, [top, stage, bottomBar]);
-      document.body.appendChild(root);
-
-      closeBtn.addEventListener('click', close);
-      root.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          close();
-          return;
-        }
-        if (e.key === 'ArrowRight') {
-          e.preventDefault();
-          next();
-          return;
-        }
-        if (e.key === 'ArrowLeft') {
-          e.preventDefault();
-          prev();
-        }
-      });
-      actionsBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (!story) return;
-        paused = true;
-        showStoryActions(story);
-      });
-
-      // Set up tap areas with long-press detection for skipping users
-      let longPressTimer = null;
-      let isLongPress = false;
-
-      // Previous tap/long-press
-      tapPrev.addEventListener('mousedown', (e) => {
-        e.stopPropagation();
-        isLongPress = false;
-        longPressTimer = setTimeout(() => {
-          isLongPress = true;
-          skipToPrevUser();
-        }, 500); // 500ms for long press
-      });
-
-      tapPrev.addEventListener('mouseup', (e) => {
-        e.stopPropagation();
-        clearTimeout(longPressTimer);
-        if (!isLongPress) {
-          prev();
-        }
-      });
-
-      tapPrev.addEventListener('mouseleave', () => {
-        clearTimeout(longPressTimer);
-      });
-
-      // Next tap/long-press
-      tapNext.addEventListener('mousedown', (e) => {
-        e.stopPropagation();
-        isLongPress = false;
-        longPressTimer = setTimeout(() => {
-          isLongPress = true;
-          skipToNextUser();
-        }, 500); // 500ms for long press
-      });
-
-      tapNext.addEventListener('mouseup', (e) => {
-        e.stopPropagation();
-        clearTimeout(longPressTimer);
-        if (!isLongPress) {
-          next();
-        }
-      });
-
-      tapNext.addEventListener('mouseleave', () => {
-        clearTimeout(longPressTimer);
-      });
-
-      // Touch support for mobile
-      tapPrev.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        isLongPress = false;
-        longPressTimer = setTimeout(() => {
-          isLongPress = true;
-          skipToPrevUser();
-        }, 500);
-      }, { passive: false });
-
-      tapPrev.addEventListener('touchend', (e) => {
-        e.stopPropagation();
-        clearTimeout(longPressTimer);
-        if (!isLongPress) {
-          prev();
-        }
-      });
-
-      tapNext.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        isLongPress = false;
-        longPressTimer = setTimeout(() => {
-          isLongPress = true;
-          skipToNextUser();
-        }, 500);
-      }, { passive: false });
-
-      tapNext.addEventListener('touchend', (e) => {
-        e.stopPropagation();
-        clearTimeout(longPressTimer);
-        if (!isLongPress) {
-          next();
-        }
-      });
-
-      // Mute button - toggle audio for videos
-      muteBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        isMuted = !isMuted;
-        muteBtn.textContent = isMuted ? '🔇' : '🔊';
-        muteBtn.title = isMuted ? 'Unmute' : 'Mute';
-
-        // Update current video if playing
-        const currentVideo = stage.querySelector('video.koopo-stories__media');
-        if (currentVideo) {
-          currentVideo.muted = isMuted;
-        }
-      });
-
-      // Report button - show report modal
-      reportBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (!story) return;
-        showReportModal(story.story_id, story.author);
-      });
-
-      // Reaction button - show emoji picker
-      reactionBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (!story) return;
-        paused = true; // Pause story while reacting
-        showReactionPicker(story.story_id);
-      });
-
-      // Reply button - show reply modal
-      replyBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (!story) return;
-        paused = true; // Pause story while replying
-        showReplyModal(story.story_id, story.author);
-      });
-
-      // Hold to pause (mouse/touch)
-      const pauseOn = () => { paused = true; };
-      const resumeOn = () => { paused = false; startTs = performance.now() - currentProgress() * duration; loop(); };
-      root.addEventListener('mousedown', pauseOn);
-      root.addEventListener('mouseup', resumeOn);
-      root.addEventListener('touchstart', pauseOn, { passive: true });
-      root.addEventListener('touchend', resumeOn);
-
-      document.addEventListener('keydown', (e) => {
-        if (!root.classList.contains('is-open')) return;
-        if (e.key === 'Escape') close();
-
-        // Shift + Arrow keys to skip users
-        if (e.shiftKey && e.key === 'ArrowLeft') {
-          e.preventDefault();
-          skipToPrevUser();
-        } else if (e.shiftKey && e.key === 'ArrowRight') {
-          e.preventDefault();
-          skipToNextUser();
-        } else if (e.key === 'ArrowLeft') {
-          prev();
-        } else if (e.key === 'ArrowRight') {
-          next();
-        }
-      });
+  function setLoading(container, isLoading) {
+    if (isLoading) {
+      const token = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      container.dataset.loadingToken = token;
+      if (!container.querySelector('.koopo-stories__loader')) {
+        container.innerHTML = '<div class="koopo-stories__loader"><div class="koopo-stories__spinner"></div></div>';
+      }
+      container.classList.add('is-loading');
+      return token;
     }
 
-    function open(storyData, storiesList = [], storyIdx = 0, goToLastItem = false) {
-      ensure();
-
-      // Detect if we're switching to a different author (for flip animation)
-      const currentAuthorId = story?.author?.id;
-      const newAuthorId = storyData?.author?.id;
-      const isAuthorChange = previousAuthorId !== null && currentAuthorId !== newAuthorId && root.classList.contains('is-open');
-
-      story = storyData;
-      if (!Array.isArray(story.story_ids) || story.story_ids.length === 0) {
-        story.story_ids = [story.story_id];
-      }
-      allStories = storiesList;
-      currentStoryIndex = storyIdx;
-
-      // Set item index: last item if going backward, otherwise first item
-      const totalItems = (story.items || []).length;
-      itemIndex = goToLastItem && totalItems > 0 ? totalItems - 1 : 0;
-      previousAuthorId = newAuthorId;
-
-      // Apply flip animation if switching authors
-      if (isAuthorChange) {
-        // Update content immediately so it's ready on the "back" of the flip
-        updateStoryContent();
-
-        // Add flip animation class
-        root.classList.add('flipping-out');
-
-        // Wait for flip to reach midpoint (200ms), then switch to flip-in
-        setTimeout(() => {
-          root.classList.remove('flipping-out');
-          root.classList.add('flipping-in');
-
-          // After flip-in completes (200ms), start playing
-          setTimeout(() => {
-            root.classList.remove('flipping-in');
-            playItem(itemIndex);
-          }, 200);
-        }, 200);
-      } else {
-        updateStoryContent();
-        root.classList.add('is-open');
-        root.focus();
-        document.documentElement.style.overflow = 'hidden';
-        document.body.style.overflow = 'hidden';
-        playItem(itemIndex);
-      }
-    }
-
-    function updateStoryContent() {
-      headerAvatar.src = story.author?.avatar || '';
-      headerName.textContent = story.author?.name || '';
-
-      // Set profile URL and make clickable
-      const profileUrl = story.author?.profile_url || '';
-      if (profileUrl) {
-        headerAvatarLink.href = profileUrl;
-        headerAvatarLink.target = '_blank';
-        headerAvatarLink.style.cursor = 'pointer';
-      } else {
-        headerAvatarLink.href = '#';
-        headerAvatarLink.removeAttribute('target');
-        headerAvatarLink.style.cursor = 'default';
-        headerAvatarLink.onclick = (e) => e.preventDefault();
-      }
-
-      // Display analytics (views and reactions)
-      const analytics = story.analytics || {};
-      const views = analytics.view_count || 0;
-      const reactions = analytics.reaction_count || 0;
-      const currentUserId = parseInt(window.KoopoStories?.me || 0, 10);
-      const authorId = parseInt(story.author?.id || 0, 10);
-      const isOwnStory = currentUserId > 0 && currentUserId === authorId;
-
-      // Show view count (only to story author)
-      if (views > 0 && isOwnStory) {
-        viewCount.textContent = `👀 ${views}`;
-        viewCount.style.display = 'block';
-        viewCount.onclick = () => {
-          paused = true;
-          showViewerList(story.story_id);
-        };
-      } else {
-        viewCount.style.display = 'none';
-      }
-
-      // Show reaction count (visible to everyone if > 0)
-      if (reactions > 0) {
-        reactionCount.textContent = `❤️ ${reactions}`;
-        reactionCount.style.display = 'block';
-      } else {
-        reactionCount.style.display = 'none';
-      }
-
-      // Hide reaction/reply buttons for own stories
-      if (isOwnStory) {
-        bottomBar.style.display = 'none';
-        reportBtn.style.display = 'none';
-        actionsBtn.style.display = 'block';
-      } else {
-        bottomBar.style.display = 'flex';
-        reportBtn.style.display = 'block';
-        actionsBtn.style.display = 'none';
-      }
-
-      buildBars(story.items?.length || 0);
-    }
-
-    function close() {
-      if (!root) return;
-      // Add closing animation
-      root.classList.add('is-closing');
+    container.classList.remove('is-loading');
+    delete container.dataset.loadingToken;
+    const loader = container.querySelector('.koopo-stories__loader');
+    if (loader) {
+      loader.classList.add('is-hiding');
       setTimeout(() => {
-        root.classList.remove('is-open');
-        root.classList.remove('is-closing');
-        document.documentElement.style.overflow = '';
-        document.body.style.overflow = '';
-        cancel();
-        story = null;
-
-        // Refresh all trays when viewer closes to show updated data
-        document.querySelectorAll('.koopo-stories').forEach(c => refreshTray(c));
-      }, 300); // Match CSS transition duration
-    }
-
-    function cancel() {
-      if (raf) cancelAnimationFrame(raf);
-      raf = null;
-    }
-
-    function buildBars(n) {
-      barsWrap.innerHTML = '';
-      for (let i=0;i<n;i++) {
-        const fill = el('i');
-        const bar = el('div', { class: 'koopo-stories__bar' }, [fill]);
-        barsWrap.appendChild(bar);
-      }
-    }
-
-    function setBar(i, pct) {
-      const bar = barsWrap.children[i];
-      if (!bar) return;
-      const fill = bar.querySelector('i');
-      if (fill) fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
-    }
-
-    function currentProgress() {
-      if (!duration) return 0;
-      return Math.max(0, Math.min(1, (performance.now() - startTs) / duration));
-    }
-
-    async function markSeen(itemId) {
-      try { await apiPost(`${API_BASE}/items/${itemId}/seen`, null); } catch(e) {}
-    }
-
-    function playItem(i) {
-      cancel();
-      itemIndex = i;
-      const items = story.items || [];
-      if (!items[itemIndex]) { close(); return; }
-
-      // Fill previous bars
-      for (let b=0;b<items.length;b++) setBar(b, b < itemIndex ? 100 : 0);
-
-      const item = items[itemIndex];
-
-      // Add transition animation
-      stage.classList.add('transitioning');
-      setTimeout(() => {
-        stage.querySelectorAll('.koopo-stories__media').forEach(n => n.remove());
-        loadMediaForItem(item);
-        stage.classList.remove('transitioning');
+        if (loader.parentNode) loader.parentNode.removeChild(loader);
       }, 200);
     }
-
-    function loadMediaForItem(item) {
-
-      if (item.type === 'video') {
-        const vid = document.createElement('video');
-        vid.className = 'koopo-stories__media';
-        vid.src = item.src;
-        vid.playsInline = true;
-        vid.muted = isMuted;
-        vid.autoplay = true;
-        vid.controls = false;
-        vid.addEventListener('loadedmetadata', () => {
-          duration = (vid.duration && isFinite(vid.duration)) ? vid.duration * 1000 : 8000;
-          startTs = performance.now();
-          loop();
-        });
-        vid.addEventListener('ended', () => next());
-        stage.appendChild(vid);
-
-        // Show mute button for videos
-        muteBtn.style.display = 'block';
-
-        vid.play().catch(()=>{});
-      } else {
-        const img = document.createElement('img');
-        img.className = 'koopo-stories__media';
-        img.src = item.src;
-        stage.appendChild(img);
-
-        // Hide mute button for images
-        muteBtn.style.display = 'none';
-
-        duration = item.duration_ms || 5000;
-        startTs = performance.now();
-        loop();
-      }
-
-      // Render stickers for this item
-      renderStickers(item);
-
-      // mark seen once
-      if (item.item_id) markSeen(item.item_id);
-    }
-
-    // Helper function to resume story after modal closes
-    function resumeStory() {
-      paused = false;
-      startTs = performance.now() - currentProgress() * duration;
-      loop();
-    }
-
-    function currentItemStoryId() {
-      const items = story?.items || [];
-      const item = items[itemIndex];
-      const storyId = parseInt(item?.story_id || 0, 10);
-      return storyId > 0 ? storyId : null;
-    }
-
-    function loop() {
-      cancel();
-      const items = story.items || [];
-      const item = items[itemIndex];
-      if (!item) return;
-
-      if (!paused) {
-        const pct = currentProgress() * 100;
-        setBar(itemIndex, pct);
-        if (pct >= 100) { next(); return; }
-      }
-      raf = requestAnimationFrame(loop);
-    }
-
-    // Helper function to load all stories for a user (combining multiple stories into one)
-    async function loadUserStories(storyData) {
-      if (!storyData || !storyData.story_id) return null;
-
-      try {
-        // If this user has multiple stories, fetch and combine them
-        if (storyData.story_ids && storyData.story_ids.length > 1) {
-          const storyPromises = storyData.story_ids.map(sid => apiGet(`${API_BASE}/${sid}`));
-          const authorStories = await Promise.all(storyPromises);
-
-          // Combine all items from all stories into one virtual story
-          const combinedStory = {
-            story_id: storyData.story_id,
-            story_ids: storyData.story_ids || [storyData.story_id],
-            author: storyData.author,
-            items: [],
-            privacy: storyData.privacy,
-            analytics: {
-              view_count: 0,
-              reaction_count: 0,
-            },
-          };
-
-          authorStories.forEach(story => {
-            if (story.items && Array.isArray(story.items)) {
-              combinedStory.items = combinedStory.items.concat(story.items);
-            }
-            const storyViews = story.analytics?.view_count || 0;
-            const storyReactions = story.analytics?.reaction_count || 0;
-            combinedStory.analytics.view_count = Math.max(combinedStory.analytics.view_count, storyViews);
-            combinedStory.analytics.reaction_count += storyReactions;
-          });
-
-          return combinedStory;
-        } else {
-          // Single story, just fetch it
-          return await apiGet(`${API_BASE}/${storyData.story_id}`);
-        }
-      } catch(e) {
-        console.error('Failed to load user stories:', e);
-        return null;
-      }
-    }
-
-    async function next() {
-      const items = story.items || [];
-      if (itemIndex + 1 < items.length) {
-        // More items in current story
-        playItem(itemIndex + 1);
-      } else if (allStories.length > 0 && currentStoryIndex + 1 < allStories.length) {
-        // Current story finished, load next user's story
-        const nextStoryData = allStories[currentStoryIndex + 1];
-        const nextStory = await loadUserStories(nextStoryData);
-
-        if (nextStory) {
-          open(nextStory, allStories, currentStoryIndex + 1);
-
-          // Update ring to mark as seen
-          const bubble = document.querySelector(`.koopo-stories__bubble[data-story-id="${nextStoryData.story_id}"]`);
-          if (bubble) bubble.setAttribute('data-seen', '1');
-        } else {
-          close();
-        }
-      } else {
-        // No more stories
-        close();
-      }
-    }
-
-    async function prev() {
-      if (itemIndex - 1 >= 0) {
-        // Go to previous item in current story
-        playItem(itemIndex - 1);
-      } else if (allStories.length > 0 && currentStoryIndex - 1 >= 0) {
-        // At first item, load previous user's story
-        const prevStoryData = allStories[currentStoryIndex - 1];
-        const prevStory = await loadUserStories(prevStoryData);
-
-        if (prevStory) {
-          open(prevStory, allStories, currentStoryIndex - 1, true); // true = go to last item
-        }
-      } else {
-        // Already at first item of first story, replay current item
-        playItem(0);
-      }
-    }
-
-    // Skip to next user (skip all remaining items in current user's stories)
-    async function skipToNextUser() {
-      if (allStories.length > 0 && currentStoryIndex + 1 < allStories.length) {
-        const nextStoryData = allStories[currentStoryIndex + 1];
-        const nextStory = await loadUserStories(nextStoryData);
-
-        if (nextStory) {
-          open(nextStory, allStories, currentStoryIndex + 1);
-
-          // Update ring to mark as seen
-          const bubble = document.querySelector(`.koopo-stories__bubble[data-story-id="${nextStoryData.story_id}"]`);
-          if (bubble) bubble.setAttribute('data-seen', '1');
-        } else {
-          close();
-        }
-      } else {
-        close();
-      }
-    }
-
-    // Skip to previous user (skip all items in current user's stories)
-    async function skipToPrevUser() {
-      if (allStories.length > 0 && currentStoryIndex - 1 >= 0) {
-        const prevStoryData = allStories[currentStoryIndex - 1];
-        const prevStory = await loadUserStories(prevStoryData);
-
-        if (prevStory) {
-          open(prevStory, allStories, currentStoryIndex - 1);
-        }
-      }
-    }
-
-    function renderStickers(item) {
-      // Remove existing stickers
-      stage.querySelectorAll('.koopo-stories__sticker').forEach(s => s.remove());
-
-      if (!item.stickers || item.stickers.length === 0) return;
-
-      const stickers = item.stickers;
-      stickers.forEach(sticker => {
-        const stickerEl = createStickerElement(sticker);
-        if (stickerEl) {
-          stage.appendChild(stickerEl);
-        }
-      });
-    }
-
-    // Create sticker element based on type
-    function createStickerElement(sticker) {
-    const wrapper = el('div', {
-      class: 'koopo-stories__sticker',
-      style: `position:absolute;left:${sticker.position.x}%;top:${sticker.position.y}%;transform:translate(-50%,-50%);z-index:10;`
-    });
-
-    let content;
-
-    switch (sticker.type) {
-      case 'mention':
-        content = el('div', {
-          class: 'koopo-stories__sticker-mention',
-          style: 'background:rgba(0,0,0,0.7);color:#fff;padding:8px 16px;border-radius:20px;font-size:14px;font-weight:500;cursor:pointer border:solid 1px #ffba12;'
-        });
-        content.textContent = `@${sticker.data.username}`;
-        content.onclick = () => {
-          if (sticker.data.profile_url) {
-            window.open(sticker.data.profile_url, '_blank');
-          }
-        };
-        break;
-
-      case 'link':
-        content = el('div', {
-          class: 'koopo-stories__sticker-link',
-          style: 'background:rgba(255,255,255,0.95);color:#000;padding:12px 16px;border-radius:12px;font-size:13px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.2);max-width:200px;'
-        });
-        const linkIcon = el('div', { style: 'font-size:18px;margin-bottom:4px;' });
-        linkIcon.textContent = '🔗';
-        const linkTitle = el('div', { style: 'font-weight:600;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' });
-        linkTitle.textContent = sticker.data.title;
-        const linkUrl = el('div', { style: 'font-size:11px;opacity:0.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' });
-        linkUrl.textContent = sticker.data.url;
-        content.appendChild(linkIcon);
-        content.appendChild(linkTitle);
-        content.appendChild(linkUrl);
-        content.onclick = () => window.open(sticker.data.url, '_blank');
-        break;
-
-      case 'location':
-        content = el('div', {
-          class: 'koopo-stories__sticker-location',
-          style: 'background:rgba(0,0,0,0.7);color:#fff;padding:10px 14px;border-radius:16px;font-size:13px;cursor:pointer;'
-        });
-        const locIcon = el('span', { style: 'margin-right:6px;font-size:16px;' });
-        locIcon.textContent = '📍';
-        const locName = el('span', { style: 'font-weight:500;' });
-        locName.textContent = sticker.data.name;
-        content.appendChild(locIcon);
-        content.appendChild(locName);
-        if (sticker.data.lat && sticker.data.lng) {
-          content.onclick = () => {
-            window.open(`https://maps.google.com/?q=${sticker.data.lat},${sticker.data.lng}`, '_blank');
-          };
-        }
-        break;
-
-      case 'poll':
-        content = createPollSticker(sticker);
-        break;
-
-      default:
-        return null;
-    }
-
-    if (content) {
-      wrapper.appendChild(content);
-      return wrapper;
-    }
-
-    return null;
   }
 
-  // Create interactive poll sticker
-  function createPollSticker(sticker) {
-    const pollData = sticker.data;
+  function waitForContent(container, token, timeoutMs = 10000) {
+    const start = performance.now();
+    const tick = () => {
+      if (!document.body.contains(container)) return;
+      if (token && container.dataset.loadingToken !== token) return;
+      const hasItems = container.querySelector('.koopo-stories__bubble, .koopo-stories__archive-card');
+      if (hasItems) {
+        setLoading(container, false);
+        return;
+      }
+      if (timeoutMs && performance.now() - start > timeoutMs) {
+        setLoading(container, false);
+        return;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
 
-    const pollContainer = el('div', {
-      class: 'koopo-stories__sticker-poll',
-      style: 'background:rgba(255,255,255,0.95);color:#000;padding:16px;border-radius:16px;min-width:250px;max-width:300px;box-shadow:0 4px 12px rgba(0,0,0,0.3);'
-    });
+  function getTrayContent(container) {
+    let content = container.querySelector('.koopo-stories__content');
+    if (!content) {
+      content = el('div', { class: 'koopo-stories__content' });
+      container.appendChild(content);
+    }
+    return content;
+  }
 
-    // Question
-    const question = el('div', {
-      style: 'font-weight:600;font-size:15px;margin-bottom:12px;'
-    });
-    question.textContent = pollData.question;
-    pollContainer.appendChild(question);
+  function showToast(message) {
+    const toast = el('div', { class: 'koopo-stories__toast' });
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => { toast.classList.add('is-hiding'); }, 1600);
+    setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 1900);
+  }
 
-    // Calculate total votes
-    const totalVotes = pollData.options.reduce((sum, opt) => sum + (opt.votes || 0), 0);
+  function renderSkeletonTray(container, count = 6) {
+    const loader = container.querySelector('.koopo-stories__loader');
+    if (loader) loader.remove();
+    const content = getTrayContent(container);
+    content.innerHTML = '';
 
-    // Options
-    pollData.options.forEach((option, idx) => {
-      const votes = option.votes || 0;
-      const percentage = totalVotes > 0 ? Math.round((votes / totalVotes) * 100) : 0;
+    const myStoryData = {
+      story_id: 0,
+      author: {
+        id: window.KoopoStories.me,
+        name: 'Your Story',
+        avatar: window.KoopoStories.meAvatar || ''
+      },
+      cover_thumb: '',
+      has_unseen: false,
+      items_count: 0,
+      unseen_count: 0,
+      privacy: 'friends',
+    };
 
-      const optionEl = el('div', {
-        class: 'koopo-stories__poll-option',
-        style: 'position:relative;background:#f0f0f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer;overflow:hidden;'
-      });
+    const myBubble = myStoryBubble(myStoryData, false, container);
+    content.appendChild(myBubble);
 
-      // Progress bar
-      const progressBar = el('div', {
-        style: `position:absolute;top:0;left:0;bottom:0;width:${percentage}%;background:rgba(0,123,255,0.2);transition:width 0.3s;z-index:0;border-radius:8px;`
-      });
-      optionEl.appendChild(progressBar);
+    for (let i = 0; i < count; i += 1) {
+      const bubbleEl = el('div', { class: 'koopo-stories__bubble koopo-stories__bubble--skeleton' });
+      const avatar = el('div', { class: 'koopo-stories__avatar' });
+      const name = el('div', { class: 'koopo-stories__name' });
+      bubbleEl.appendChild(avatar);
+      bubbleEl.appendChild(name);
+      content.appendChild(bubbleEl);
+    }
+  }
 
-      // Option content
-      const optionContent = el('div', { style: 'position:relative;z-index:1;display:flex;justify-content:space-between;align-items:center;' });
-      const optionText = el('span', { style: 'font-size:14px;font-weight:500;' });
-      optionText.textContent = option.text;
-      const optionVotes = el('span', { style: 'font-size:12px;opacity:0.7;font-weight:600;' });
-      optionVotes.textContent = `${percentage}%`;
-      optionContent.appendChild(optionText);
-      optionContent.appendChild(optionVotes);
-      optionEl.appendChild(optionContent);
+  const scriptCache = {};
+  function loadScriptOnce(src) {
+    if (!src) return Promise.reject(new Error('Missing script URL'));
+    if (scriptCache[src]) return scriptCache[src];
 
-      // Vote handler
-      optionEl.onclick = async (e) => {
-        e.stopPropagation();
-        try {
-          const fd = new FormData();
-          fd.append('option_index', String(idx));
-          await apiPost(`${API_BASE.replace('/stories', '')}/stickers/${sticker.id}/vote`, fd);
+    scriptCache[src] = new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[data-koopo-src="${src}"]`);
+      if (existing) {
+        if (existing.dataset.loaded === '1') return resolve();
+        existing.addEventListener('load', resolve, { once: true });
+        existing.addEventListener('error', () => reject(new Error('Failed to load script')), { once: true });
+        return;
+      }
 
-          // Update votes locally
-          pollData.options[idx].votes = (pollData.options[idx].votes || 0) + 1;
-
-          // Re-render poll
-          const parent = pollContainer.parentElement;
-          if (parent) {
-            parent.removeChild(pollContainer);
-            const newPoll = createPollSticker(sticker);
-            parent.appendChild(newPoll);
-          }
-        } catch (err) {
-          console.error('Failed to vote:', err);
-        }
+      const s = document.createElement('script');
+      s.src = src;
+      s.async = true;
+      s.dataset.koopoSrc = src;
+      s.onload = () => {
+        s.dataset.loaded = '1';
+        resolve();
       };
-
-      pollContainer.appendChild(optionEl);
+      s.onerror = () => reject(new Error('Failed to load script'));
+      document.head.appendChild(s);
     });
 
-    // Total votes footer
-    if (totalVotes > 0) {
-      const footer = el('div', {
-        style: 'font-size:12px;opacity:0.6;text-align:center;margin-top:8px;'
-      });
-      footer.textContent = `${totalVotes} vote${totalVotes !== 1 ? 's' : ''}`;
-      pollContainer.appendChild(footer);
-    }
-
-    return pollContainer;
+    return scriptCache[src];
   }
 
-    return { open, close, resumeStory, currentItemStoryId };
-  })();
-
-  // Global sticker element creator for composer preview
-  function createStickerElement(sticker) {
-    const wrapper = el('div', {
-      class: 'koopo-stories__sticker',
-      style: `position:absolute;left:${sticker.position.x}%;top:${sticker.position.y}%;transform:translate(-50%,-50%);z-index:10;`
+  function ensureModule(name, srcKey) {
+    const modules = window.KoopoStoriesModules || {};
+    if (modules[name]) return Promise.resolve(modules[name]);
+    const src = window.KoopoStories ? window.KoopoStories[srcKey] : '';
+    return loadScriptOnce(src).then(() => {
+      const loaded = window.KoopoStoriesModules && window.KoopoStoriesModules[name];
+      if (!loaded) throw new Error(`Module ${name} failed to load`);
+      return loaded;
     });
+  }
 
-    let content;
+  function ensureViewer() {
+    return ensureModule('viewer', 'viewerSrc');
+  }
 
-    switch (sticker.type) {
-      case 'mention':
-        content = el('div', {
-          class: 'koopo-stories__sticker-mention',
-          style: 'background:rgba(0,0,0,0.7);color:#fff;padding:8px 16px;border-radius:20px;font-size:14px;font-weight:500;cursor:pointer;'
+  function ensureComposer() {
+    return ensureModule('composer', 'composerSrc');
+  }
+
+  async function openStoryFromTray(storyId, container, listOverride = null) {
+    const allStoriesInTray = listOverride || container?._storiesList || [];
+    const clickedStoryData = allStoriesInTray.find(st => String(st.story_id) === String(storyId));
+    const clickedIndex = allStoriesInTray.findIndex(st => String(st.story_id) === String(storyId));
+    const viewer = await ensureViewer();
+
+    if (clickedStoryData && clickedStoryData.story_ids && clickedStoryData.story_ids.length > 1) {
+      try {
+        const storyPromises = clickedStoryData.story_ids.map(sid => apiGet(`${API_BASE}/${sid}`));
+        const authorStories = await Promise.all(storyPromises);
+
+        const combinedStory = {
+          story_id: clickedStoryData.story_id,
+          story_ids: clickedStoryData.story_ids || [clickedStoryData.story_id],
+          author: clickedStoryData.author,
+          items: [],
+          privacy: clickedStoryData.privacy,
+          can_manage: false,
+          posted_at_human: '',
+          analytics: {
+            view_count: 0,
+            reaction_count: 0,
+          },
+        };
+
+        authorStories.forEach(story => {
+          if (story.items && Array.isArray(story.items)) {
+            combinedStory.items = combinedStory.items.concat(story.items);
+          }
+          const storyViews = story.analytics?.view_count || 0;
+          const storyReactions = story.analytics?.reaction_count || 0;
+          combinedStory.analytics.view_count = Math.max(combinedStory.analytics.view_count, storyViews);
+          combinedStory.analytics.reaction_count += storyReactions;
+          if (story.can_manage) combinedStory.can_manage = true;
+          if (!combinedStory.posted_at_human && story.posted_at_human) {
+            combinedStory.posted_at_human = story.posted_at_human;
+          }
         });
-        content.textContent = `@${sticker.data.username}`;
-        if (sticker.data.profile_url) {
-          content.onclick = () => window.open(sticker.data.profile_url, '_blank');
+
+        combinedStory.items.sort((a, b) => {
+          return new Date(a.created_at) - new Date(b.created_at);
+        });
+
+        if (!combinedStory.items || combinedStory.items.length === 0) {
+          throw new Error('Story content unavailable.');
         }
-        break;
-
-      case 'link':
-        content = el('div', {
-          class: 'koopo-stories__sticker-link',
-          style: 'background:rgba(255,255,255,0.95);color:#000;padding:12px 16px;border-radius:12px;font-size:13px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.2);max-width:200px;'
-        });
-        const linkIcon = el('div', { style: 'font-size:18px;margin-bottom:4px;' });
-        linkIcon.textContent = '🔗';
-        const linkTitle = el('div', { style: 'font-weight:600;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' });
-        linkTitle.textContent = sticker.data.title;
-        const linkUrl = el('div', { style: 'font-size:11px;opacity:0.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' });
-        linkUrl.textContent = sticker.data.url;
-        content.appendChild(linkIcon);
-        content.appendChild(linkTitle);
-        content.appendChild(linkUrl);
-        content.onclick = () => window.open(sticker.data.url, '_blank');
-        break;
-
-      case 'location':
-        content = el('div', {
-          class: 'koopo-stories__sticker-location',
-          style: 'background:rgba(0,0,0,0.7);color:#fff;padding:10px 14px;border-radius:16px;font-size:13px;cursor:pointer;'
-        });
-        const locIcon = el('span', { style: 'margin-right:6px;font-size:16px;' });
-        locIcon.textContent = '📍';
-        const locName = el('span', { style: 'font-weight:500;' });
-        locName.textContent = sticker.data.name;
-        content.appendChild(locIcon);
-        content.appendChild(locName);
-        if (sticker.data.lat && sticker.data.lng) {
-          content.onclick = () => {
-            window.open(`https://maps.google.com/?q=${sticker.data.lat},${sticker.data.lng}`, '_blank');
-          };
-        }
-        break;
-
-      case 'poll':
-        content = el('div', {
-          class: 'koopo-stories__sticker-poll',
-          style: 'background:rgba(255,255,255,0.95);color:#000;padding:16px;border-radius:16px;min-width:250px;max-width:300px;box-shadow:0 4px 12px rgba(0,0,0,0.3);'
-        });
-        const pollQuestion = el('div', { style: 'font-weight:600;font-size:15px;margin-bottom:12px;' });
-        pollQuestion.textContent = sticker.data.question;
-        content.appendChild(pollQuestion);
-
-        if (sticker.data.options && Array.isArray(sticker.data.options)) {
-          sticker.data.options.forEach((option) => {
-            const optionEl = el('div', {
-              style: 'background:#f0f0f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;'
-            });
-            const optionText = el('span', { style: 'font-size:14px;font-weight:500;' });
-            optionText.textContent = option.text;
-            optionEl.appendChild(optionText);
-            content.appendChild(optionEl);
-          });
-        }
-        break;
-
-      default:
-        return null;
+        viewer.open(combinedStory, allStoriesInTray, clickedIndex >= 0 ? clickedIndex : 0);
+        return true;
+      } catch (err) {
+        console.error('Failed to load author stories:', err);
+        showToast('Story content unavailable.');
+      }
     }
 
-    if (content) {
-      wrapper.appendChild(content);
-      return wrapper;
+    try {
+      const story = await apiGet(`${API_BASE}/${storyId}`);
+      if (!story.items || story.items.length === 0) {
+        throw new Error('Story content unavailable.');
+      }
+      viewer.open(story, allStoriesInTray, clickedIndex >= 0 ? clickedIndex : 0);
+      return true;
+    } catch (err) {
+      console.error('Failed to load story:', err);
+      showToast('Story content unavailable.');
+      return false;
     }
-
-    return null;
   }
 
   async function loadTray(container) {
@@ -971,59 +297,39 @@
     const showUnseenBadge = (container.getAttribute('data-show-unseen-badge') || '1') === '1';
     const excludeMe = container.getAttribute('data-exclude-me') || '0';
 
-    // Show loading spinner
-    container.innerHTML = '<div class="koopo-stories__loader"><div class="koopo-stories__spinner"></div></div>';
+    // Show skeleton tray immediately
+    renderSkeletonTray(container, 6);
+    const content = getTrayContent(container);
 
     try {
-      const data = await apiGet(`${API_BASE}?limit=${encodeURIComponent(limit)}&scope=${encodeURIComponent(scope)}&order=${encodeURIComponent(order)}&exclude_me=${encodeURIComponent(excludeMe)}`);
+      const mineResp = await apiGet(`${API_BASE}?limit=${encodeURIComponent(limit)}&order=${encodeURIComponent(order)}&only_me=1`);
+      const myStories = mineResp.stories || [];
+      const data = await apiGet(`${API_BASE}?limit=${encodeURIComponent(limit)}&scope=${encodeURIComponent(scope)}&order=${encodeURIComponent(order)}&exclude_me=1`);
       const stories = data.stories || [];
-      container.innerHTML = '';
+      content.innerHTML = '';
 
-    // "Your story" uploader bubble
-    if (showUploader) {
-      const meBubble = bubble({
-      story_id: 0,
-      author: { id: window.KoopoStories.me, name: 'Your Story', avatar: window.KoopoStories.meAvatar || '' },
-      cover_thumb: '',
-      has_unseen: false,
-      items_count: 0,
-    }, true, showUnseenBadge);
-      container.appendChild(meBubble);
-    }
+      // "Your story" bubble (current user only)
+      const myStoryData = myStories[0] || {
+        story_id: 0,
+        author: { id: window.KoopoStories.me, name: 'Your Story', avatar: window.KoopoStories.meAvatar || '' },
+        cover_thumb: '',
+        has_unseen: false,
+        items_count: 0,
+        unseen_count: 0,
+        privacy: 'friends',
+      };
+      container._myStoriesList = myStories;
+      const myBubble = myStoryBubble(myStoryData, showUnseenBadge, container);
+      content.appendChild(myBubble);
 
       // Store stories list on container for later access
       container._storiesList = stories;
-      stories.forEach(s => container.appendChild(bubble(s, false, showUnseenBadge)));
-
-      // Set up auto-refresh if not already set
-      if (!container._refreshInterval) {
-        container._refreshInterval = setInterval(() => {
-          // Silently refresh without showing loader
-          apiGet(`${API_BASE}?limit=${encodeURIComponent(limit)}&scope=${encodeURIComponent(scope)}&order=${encodeURIComponent(order)}&exclude_me=${encodeURIComponent(excludeMe)}`)
-            .then(data => {
-              const freshStories = data.stories || [];
-              container.innerHTML = '';
-
-              if (showUploader) {
-                const meBubble = bubble({
-                  story_id: 0,
-                  author: { id: window.KoopoStories.me, name: 'Your Story', avatar: window.KoopoStories.meAvatar || '' },
-                  cover_thumb: '',
-                  has_unseen: false,
-                  items_count: 0,
-                }, true, showUnseenBadge);
-                container.appendChild(meBubble);
-              }
-
-              container._storiesList = freshStories;
-              freshStories.forEach(s => container.appendChild(bubble(s, false, showUnseenBadge)));
-            })
-            .catch(err => console.error('Auto-refresh failed:', err));
-        }, 30000); // Refresh every 30 seconds
-      }
+      stories.forEach(s => content.appendChild(bubble(s, false, showUnseenBadge)));
+      openStoryFromUrl(container);
+      // Auto-refresh removed to avoid reloading after viewing stories.
     } catch (err) {
       console.error('Failed to load stories:', err);
-      container.innerHTML = '<div style="padding:20px;text-align:center;color:#999;">Failed to load stories</div>';
+      content.innerHTML = '<div style="padding:20px;text-align:center;color:#999;">Failed to load stories</div>';
     }
   }
 
@@ -1037,15 +343,26 @@
     return loadTray(container).catch(()=>{});
   }
 
+  function openStoryFromUrl(container) {
+    if (container.dataset.koopoStoryOpened === '1') return;
+    const params = new URLSearchParams(window.location.search || '');
+    const storyId = params.get('koopo_story');
+    if (!storyId) return;
+    container.dataset.koopoStoryOpened = '1';
+    openStoryFromTray(storyId, container);
+  }
+
   async function loadArchiveTray(container, opts = {}) {
     const limit = container.getAttribute('data-limit') || '20';
     const append = opts.append === true;
     const page = opts.page || 1;
 
+    let loadToken = '';
     if (!append) {
-      container.innerHTML = '<div class="koopo-stories__loader"><div class="koopo-stories__spinner"></div></div>';
+      loadToken = setLoading(container, true);
       container._storiesList = [];
     }
+    const content = getTrayContent(container);
 
     try {
       const data = await apiGet(`${API_BASE}/archive?limit=${encodeURIComponent(limit)}&page=${encodeURIComponent(page)}`);
@@ -1053,29 +370,33 @@
       const hasMore = !!data.has_more;
 
       if (!append) {
-        container.innerHTML = '';
+        content.innerHTML = '';
       }
 
       if (!append && stories.length === 0) {
-        container.innerHTML = `<div style="padding:20px;text-align:center;color:#999;">${t('archive_empty', 'Archive empty')}</div>`;
+        content.innerHTML = `<div style="padding:20px;text-align:center;color:#999;">${t('archive_empty', 'Archive empty')}</div>`;
         container.dataset.archiveHasMore = '0';
         container.dataset.archiveLoading = '0';
         container.dataset.archivePage = '1';
+        setLoading(container, false);
         return;
       }
 
       container._storiesList = (container._storiesList || []).concat(stories);
-      stories.forEach(s => container.appendChild(archiveCard(s, container)));
+      stories.forEach(s => content.appendChild(archiveCard(s, container)));
 
       container.dataset.archiveHasMore = hasMore ? '1' : '0';
       container.dataset.archivePage = String(page);
+      if (!append) waitForContent(container, loadToken);
     } catch (err) {
       console.error('Failed to load archived stories:', err);
       if (!append) {
-      container.innerHTML = `<div style="padding:20px;text-align:center;color:#999;">${t('archive_load_failed', 'Failed to load archived stories')}</div>`;
+        content.innerHTML = `<div style="padding:20px;text-align:center;color:#999;">${t('archive_load_failed', 'Failed to load archived stories')}</div>`;
+        setLoading(container, false);
       }
     } finally {
       container.dataset.archiveLoading = '0';
+      if (!append) waitForContent(container, loadToken);
     }
   }
 
@@ -1118,7 +439,12 @@
         const story = await apiGet(`${API_BASE}/${storyId}`);
         const storiesList = container?._storiesList || [];
         const clickedIndex = storiesList.findIndex(st => String(st.story_id) === String(storyId));
-        Viewer.open(story, storiesList, clickedIndex >= 0 ? clickedIndex : 0);
+        const viewer = await ensureViewer();
+        if (!story.items || story.items.length === 0) {
+          showToast('Story content unavailable.');
+          return;
+        }
+        viewer.open(story, storiesList, clickedIndex >= 0 ? clickedIndex : 0);
       } finally {
         loadingOverlay.remove();
       }
@@ -1141,10 +467,10 @@
     const name = el('div', { class: 'koopo-stories__name' });
     name.textContent = isUploader ? 'Your Story' : (s.author?.name || 'Story');
 
-    // Show badge with items count if user has stories
-    if (!isUploader && (s.items_count || 0) >= 1) {
+    // Show badge with unseen count if enabled
+    if (!isUploader && showUnseenBadge && (s.unseen_count || 0) > 0) {
       const badge = el('div', { class: 'koopo-stories__badge' });
-      badge.textContent = String(s.items_count);
+      badge.textContent = String(s.unseen_count);
       avatar.appendChild(badge);
     }
 
@@ -1168,7 +494,11 @@
     b.appendChild(name);
 
     if (isUploader) {
-      b.addEventListener('click', () => uploader());
+      b.addEventListener('click', () => {
+        ensureComposer()
+          .then(mod => mod.uploader())
+          .catch(err => console.error('Failed to load composer:', err));
+      });
     } else {
       b.addEventListener('click', async () => {
         const storyId = b.getAttribute('data-story-id');
@@ -1181,65 +511,16 @@
         document.body.appendChild(loadingOverlay);
 
         try {
-          // Get all stories from the container
           const container = b.closest('.koopo-stories');
-          const allStoriesInTray = container?._storiesList || [];
-
-          // Find the clicked story data
-          const clickedStoryData = allStoriesInTray.find(st => String(st.story_id) === storyId);
-          const clickedIndex = allStoriesInTray.findIndex(st => String(st.story_id) === storyId);
-
-          // If this author has multiple stories, fetch and combine them all
-          if (clickedStoryData && clickedStoryData.story_ids && clickedStoryData.story_ids.length > 1) {
-            try {
-              // Fetch all stories for this author
-              const storyPromises = clickedStoryData.story_ids.map(sid => apiGet(`${API_BASE}/${sid}`));
-              const authorStories = await Promise.all(storyPromises);
-
-              // Combine all items from all stories into one virtual story
-              const combinedStory = {
-                story_id: clickedStoryData.story_id,
-                story_ids: clickedStoryData.story_ids || [clickedStoryData.story_id],
-                author: clickedStoryData.author,
-                items: [],
-                privacy: clickedStoryData.privacy,
-                analytics: {
-                  view_count: 0,
-                  reaction_count: 0,
-                },
-              };
-
-              // Merge all items from all stories
-              authorStories.forEach(story => {
-                if (story.items && Array.isArray(story.items)) {
-                  combinedStory.items = combinedStory.items.concat(story.items);
-                }
-                const storyViews = story.analytics?.view_count || 0;
-                const storyReactions = story.analytics?.reaction_count || 0;
-                combinedStory.analytics.view_count = Math.max(combinedStory.analytics.view_count, storyViews);
-                combinedStory.analytics.reaction_count += storyReactions;
-              });
-
-              // Sort items by creation date
-              combinedStory.items.sort((a, b) => {
-                return new Date(a.created_at) - new Date(b.created_at);
-              });
-
-              Viewer.open(combinedStory, allStoriesInTray, clickedIndex >= 0 ? clickedIndex : 0);
-            } catch (err) {
-              console.error('Failed to load author stories:', err);
-              // Fallback to single story
-              const story = await apiGet(`${API_BASE}/${storyId}`);
-              Viewer.open(story, allStoriesInTray, clickedIndex >= 0 ? clickedIndex : 0);
-            }
-          } else {
-            // Single story, load normally
-            const story = await apiGet(`${API_BASE}/${storyId}`);
-            Viewer.open(story, allStoriesInTray, clickedIndex >= 0 ? clickedIndex : 0);
-          }
+          await openStoryFromTray(storyId, container);
 
           // update ring locally
           b.setAttribute('data-seen','1');
+          const badge = b.querySelector('.koopo-stories__badge');
+          if (badge) badge.remove();
+        } catch (err) {
+          console.error('Failed to open story:', err);
+          showToast('Story content unavailable.');
         } finally {
           // Remove loading overlay
           loadingOverlay.remove();
@@ -1249,1202 +530,59 @@
     return b;
   }
 
-  async function uploader() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*,video/*';
-    input.style.position = 'fixed';
-    input.style.left = '-9999px';
-    input.style.top = '0';
-    document.body.appendChild(input);
-    input.onchange = () => {
-      const file = input.files && input.files[0];
-      if (!file) {
-        input.remove();
-        return;
-      }
-      openComposer(file);
-      input.value = '';
-      input.remove();
-    };
-    input.onclick = () => {
-      // Reset so selecting the same file still triggers change on mobile.
-      input.value = '';
-    };
-    input.click();
-  }
+  function myStoryBubble(s, showUnseenBadge, container) {
+    const b = el('div', { class: 'koopo-stories__bubble koopo-stories__bubble--me', 'data-story-id': String(s.story_id || 0), 'data-seen': s.has_unseen ? '0' : '1' });
+    const avatar = el('div', { class: 'koopo-stories__avatar' });
+    const ring = el('div', { class: 'koopo-stories__ring' });
+    const img = el('img', { src: s.author?.avatar || s.cover_thumb || window.KoopoStories.meAvatar || '' });
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    avatar.appendChild(ring);
+    avatar.appendChild(img);
 
-  function openComposer(file) {
-    // Simple preview + confirm composer (MVP+)
-    const overlay = el('div', { class: 'koopo-stories__composer', role: 'dialog', 'aria-modal': 'true', tabindex: '-1' });
-    const panel = el('div', { class: 'koopo-stories__composer-panel' });
-    const title = el('div', { class: 'koopo-stories__composer-title', html: 'Post a story' });
+    const name = el('div', { class: 'koopo-stories__name' });
+    name.textContent = 'Your Story';
 
-    const preview = el('div', {
-      class: 'koopo-stories__composer-preview',
-      style: 'position:relative;'
-    });
-    const url = URL.createObjectURL(file);
-
-    let mediaEl;
-    if ((file.type || '').startsWith('video/')) {
-      mediaEl = document.createElement('video');
-      mediaEl.src = url;
-      mediaEl.muted = true;
-      mediaEl.playsInline = true;
-      mediaEl.controls = true;
-      mediaEl.autoplay = true;
-    } else {
-      mediaEl = document.createElement('img');
-      mediaEl.src = url;
-      mediaEl.alt = '';
-    }
-    preview.appendChild(mediaEl);
-
-    // Sticker toolbar
-    const stickerToolbar = el('div', {
-      class: 'koopo-stories__composer-toolbar',
-      style: 'display:flex;gap:8px;padding:12px;background:rgba(0,0,0,0.05);border-radius:8px;margin:12px 0;'
-    });
-
-    const stickerButtons = [
-      { icon: '@', label: 'Mention', type: 'mention' },
-      { icon: '🔗', label: 'Link', type: 'link' },
-      { icon: '📍', label: 'Location', type: 'location' },
-      { icon: '📊', label: 'Poll', type: 'poll' }
-    ];
-
-    // Array to store stickers to be added
-    const pendingStickers = [];
-
-    stickerButtons.forEach(btn => {
-      const button = el('button', {
-        class: 'koopo-stories__composer-sticker-btn',
-        type: 'button',
-        style: 'flex:1;padding:8px;background:#fff;border:1px solid #ddd;border-radius:6px;cursor:pointer;font-size:12px;display:flex;flex-direction:column;align-items:center;gap:4px;transition:background 0.2s;'
-      });
-
-      const icon = el('span', { style: 'font-size:20px;' });
-      icon.textContent = btn.icon;
-      const label = el('span', { style: 'font-size:11px;color:#666;' });
-      label.textContent = btn.label;
-
-      button.appendChild(icon);
-      button.appendChild(label);
-
-      button.onclick = () => openStickerModal(btn.type, pendingStickers, preview);
-      button.onmouseover = () => { button.style.background = '#f0f0f0'; };
-      button.onmouseout = () => { button.style.background = '#fff'; };
-
-      stickerToolbar.appendChild(button);
-    });
-
-    // Privacy selector
-    const privacyWrap = el('div', { class: 'koopo-stories__composer-privacy' });
-    const privacyLabel = el('label', { class: 'koopo-stories__composer-privacy-label' });
-    privacyLabel.textContent = 'Who can see this?';
-    const privacySelect = el('select', { class: 'koopo-stories__composer-privacy-select' });
-
-    const publicOption = el('option', { value: 'public' });
-    publicOption.textContent = 'Public';
-    const friendsOption = el('option', { value: 'friends' });
-    friendsOption.textContent = 'Friends Only';
-    friendsOption.selected = true;
-    const closeFriendsOption = el('option', { value: 'close_friends' });
-    closeFriendsOption.textContent = 'Close Friends';
-
-    privacySelect.appendChild(publicOption);
-    privacySelect.appendChild(friendsOption);
-    privacySelect.appendChild(closeFriendsOption);
-
-    privacyWrap.appendChild(privacyLabel);
-    privacyWrap.appendChild(privacySelect);
-
-    const actions = el('div', { class: 'koopo-stories__composer-actions' });
-    const cancelBtn = el('button', { class: 'koopo-stories__composer-cancel', type: 'button' });
-    cancelBtn.textContent = 'Cancel';
-    const postBtn = el('button', { class: 'koopo-stories__composer-post', type: 'button' });
-    postBtn.textContent = 'Post';
-    const status = el('div', { class: 'koopo-stories__composer-status', html: '' });
-    status.setAttribute('aria-live', 'polite');
-
-    actions.appendChild(cancelBtn);
-    actions.appendChild(postBtn);
-
-    function close() {
-      try { URL.revokeObjectURL(url); } catch(e) {}
-      overlay.remove();
+    if (showUnseenBadge && (s.unseen_count || 0) > 0) {
+      const badge = el('div', { class: 'koopo-stories__badge' });
+      badge.textContent = String(s.unseen_count);
+      avatar.appendChild(badge);
     }
 
-    cancelBtn.addEventListener('click', close);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-    overlay.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        close();
-      }
+    const plusBtn = el('button', { class: 'koopo-stories__plus', type: 'button', 'aria-label': 'Add story' });
+    plusBtn.textContent = '+';
+
+    b.appendChild(avatar);
+    b.appendChild(name);
+    b.appendChild(plusBtn);
+
+    plusBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      ensureComposer()
+        .then(mod => mod.uploader())
+        .catch(err => console.error('Failed to load composer:', err));
     });
 
-    postBtn.addEventListener('click', async () => {
-      cancelBtn.disabled = true;
-      postBtn.disabled = true;
-      status.textContent = 'Uploading...';
-
-      const fd = new FormData();
-      fd.append('file', file);
-      fd.append('privacy', privacySelect.value);
-
+    b.addEventListener('click', async () => {
+      if (!s.story_id) return;
+      const loadingOverlay = el('div', { class: 'koopo-stories__click-loader with-overlay' });
+      const spinner = el('div', { class: 'koopo-stories__spinner' });
+      loadingOverlay.appendChild(spinner);
+      document.body.appendChild(loadingOverlay);
       try {
-        const response = await apiPost(`${API_BASE}`, fd);
-
-        // If stickers were added, attach them to the story
-        if (pendingStickers.length > 0 && response.story_id && response.item_id) {
-          status.textContent = 'Adding stickers...';
-
-          for (const sticker of pendingStickers) {
-            try {
-              // Send as JSON payload instead of FormData
-              const stickerPayload = {
-                type: sticker.type,
-                data: sticker.data,
-                position_x: sticker.position.x,
-                position_y: sticker.position.y,
-              };
-
-              await apiPost(`${API_BASE}/${response.story_id}/items/${response.item_id}/stickers`, stickerPayload);
-            } catch (stickerErr) {
-              console.error('Failed to add sticker:', stickerErr);
-              // Continue with other stickers even if one fails
-            }
-          }
-        }
-
-        status.textContent = 'Posted!';
-        // Refresh all trays/widgets on page
-        document.querySelectorAll('.koopo-stories').forEach(c => refreshTray(c));
-        setTimeout(close, 400);
-      } catch(e) {
-        status.textContent = e.message || 'Upload failed';
-        cancelBtn.disabled = false;
-        postBtn.disabled = false;
-      }
-    });
-
-    panel.appendChild(title);
-    panel.appendChild(preview);
-    panel.appendChild(stickerToolbar);
-    panel.appendChild(privacyWrap);
-    panel.appendChild(actions);
-    panel.appendChild(status);
-    overlay.appendChild(panel);
-    document.body.appendChild(overlay);
-    overlay.focus();
-  }
-
-  // Open modal to add a sticker
-  function openStickerModal(type, pendingStickers, preview) {
-    const modalOverlay = el('div', {
-      class: 'koopo-stories__composer',
-      style: 'z-index:9999999;'
-    });
-
-    const modalPanel = el('div', {
-      class: 'koopo-stories__composer-panel',
-      style: 'max-width:400px;'
-    });
-
-    const modalTitle = el('div', { class: 'koopo-stories__composer-title' });
-    modalTitle.textContent = `Add ${type.charAt(0).toUpperCase() + type.slice(1)}`;
-
-    const form = el('div', { style: 'padding:16px;' });
-
-    let inputFields = [];
-
-    // Create form fields based on sticker type
-    if (type === 'mention') {
-      const inputWrapper = el('div', { style: 'position:relative;' });
-
-      const input = el('input', {
-        type: 'text',
-        placeholder: 'Enter username...',
-        style: 'width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;'
-      });
-
-      const dropdown = el('div', {
-        class: 'koopo-stories__mention-dropdown',
-        style: 'display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #ddd;border-top:none;border-radius:0 0 6px 6px;max-height:200px;overflow-y:auto;z-index:1000;box-shadow:0 4px 8px rgba(0,0,0,0.1);'
-      });
-
-      // Add autocomplete functionality
-      let debounceTimer;
-      input.oninput = async () => {
-        const query = input.value.trim();
-        clearTimeout(debounceTimer);
-
-        if (query.length < 2) {
-          dropdown.style.display = 'none';
-          return;
-        }
-
-        debounceTimer = setTimeout(async () => {
-          try {
-            // Fetch member suggestions from BuddyBoss/BuddyPress
-            const response = await fetch(`${window.location.origin}/wp-json/buddyboss/v1/members?search=${encodeURIComponent(query)}&per_page=10`, {
-              headers: { 'X-WP-Nonce': window.KoopoStories?.nonce || '' }
-            });
-
-            if (!response.ok) throw new Error('Failed to fetch members');
-
-            const data = await response.json();
-            dropdown.innerHTML = '';
-
-            if (data && data.length > 0) {
-              data.forEach(member => {
-                const item = el('div', {
-                  style: 'padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:8px;transition:background 0.2s;'
-                });
-
-                // Avatar
-                if (member.avatar_urls && member.avatar_urls.thumb) {
-                  const avatar = el('img', {
-                    src: member.avatar_urls.thumb,
-                    style: 'width:32px;height:32px;border-radius:50%;'
-                  });
-                  item.appendChild(avatar);
-                }
-
-                // Name and username
-                const textContainer = el('div', { style: 'flex:1;' });
-                const name = el('div', { style: 'font-weight:500;font-size:14px;' });
-                name.textContent = member.name || member.user_login;
-                const username = el('div', { style: 'font-size:12px;color:#666;' });
-                username.textContent = '@' + (member.user_login || member.mention_name || '');
-                textContainer.appendChild(name);
-                textContainer.appendChild(username);
-                item.appendChild(textContainer);
-
-                item.onmouseover = () => { item.style.background = '#f0f0f0'; };
-                item.onmouseout = () => { item.style.background = 'transparent'; };
-                item.onclick = () => {
-                  input.value = member.user_login || member.mention_name || member.name;
-                  dropdown.style.display = 'none';
-                };
-
-                dropdown.appendChild(item);
-              });
-
-              dropdown.style.display = 'block';
-            } else {
-              dropdown.style.display = 'none';
-            }
-          } catch (err) {
-            console.error('Failed to fetch members:', err);
-            dropdown.style.display = 'none';
-          }
-        }, 300);
-      };
-
-      // Close dropdown when clicking outside
-      document.addEventListener('click', (e) => {
-        if (!inputWrapper.contains(e.target)) {
-          dropdown.style.display = 'none';
-        }
-      });
-
-      inputWrapper.appendChild(input);
-      inputWrapper.appendChild(dropdown);
-      form.appendChild(inputWrapper);
-      inputFields.push({ key: 'username', el: input });
-    } else if (type === 'link') {
-      const urlInput = el('input', {
-        type: 'url',
-        placeholder: 'Enter URL...',
-        style: 'width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;margin-bottom:10px;'
-      });
-      const titleInput = el('input', {
-        type: 'text',
-        placeholder: 'Link title (optional)...',
-        style: 'width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;'
-      });
-      form.appendChild(urlInput);
-      form.appendChild(titleInput);
-      inputFields.push({ key: 'url', el: urlInput }, { key: 'title', el: titleInput });
-    } else if (type === 'location') {
-      const nameInput = el('input', {
-        type: 'text',
-        placeholder: 'Location name...',
-        style: 'width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;margin-bottom:10px;'
-      });
-      const addressInput = el('input', {
-        type: 'text',
-        placeholder: 'Address (optional)...',
-        style: 'width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;'
-      });
-      form.appendChild(nameInput);
-      form.appendChild(addressInput);
-      inputFields.push({ key: 'name', el: nameInput }, { key: 'address', el: addressInput });
-    } else if (type === 'poll') {
-      const questionInput = el('input', {
-        type: 'text',
-        placeholder: 'Poll question...',
-        style: 'width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;margin-bottom:10px;'
-      });
-      form.appendChild(questionInput);
-
-      const option1 = el('input', {
-        type: 'text',
-        placeholder: 'Option 1...',
-        style: 'width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;margin-bottom:8px;'
-      });
-      const option2 = el('input', {
-        type: 'text',
-        placeholder: 'Option 2...',
-        style: 'width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;margin-bottom:8px;'
-      });
-      const option3 = el('input', {
-        type: 'text',
-        placeholder: 'Option 3 (optional)...',
-        style: 'width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;margin-bottom:8px;'
-      });
-      const option4 = el('input', {
-        type: 'text',
-        placeholder: 'Option 4 (optional)...',
-        style: 'width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;'
-      });
-
-      form.appendChild(option1);
-      form.appendChild(option2);
-      form.appendChild(option3);
-      form.appendChild(option4);
-
-      inputFields.push(
-        { key: 'question', el: questionInput },
-        { key: 'option1', el: option1 },
-        { key: 'option2', el: option2 },
-        { key: 'option3', el: option3 },
-        { key: 'option4', el: option4 }
-      );
-    }
-
-    const actions = el('div', { class: 'koopo-stories__composer-actions' });
-    const cancelBtn = el('button', { class: 'koopo-stories__composer-cancel', type: 'button' });
-    cancelBtn.textContent = 'Cancel';
-    const addBtn = el('button', { class: 'koopo-stories__composer-post', type: 'button' });
-    addBtn.textContent = 'Add Sticker';
-
-    actions.appendChild(cancelBtn);
-    actions.appendChild(addBtn);
-
-    const closeModal = () => modalOverlay.remove();
-
-    cancelBtn.onclick = closeModal;
-    modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
-
-    addBtn.onclick = () => {
-      const data = {};
-
-      // Collect form data
-      inputFields.forEach(field => {
-        const value = field.el.value.trim();
-        if (value) data[field.key] = value;
-      });
-
-      // Validate based on type
-      let isValid = false;
-      if (type === 'mention' && data.username) {
-        isValid = true;
-      } else if (type === 'link' && data.url) {
-        isValid = true;
-        if (!data.title) data.title = data.url;
-      } else if (type === 'location' && data.name) {
-        isValid = true;
-      } else if (type === 'poll' && data.question && data.option1 && data.option2) {
-        // Convert poll options to array format
-        const options = [data.option1, data.option2];
-        if (data.option3) options.push(data.option3);
-        if (data.option4) options.push(data.option4);
-        data.options = options.map(text => ({ text, votes: 0 }));
-        delete data.option1;
-        delete data.option2;
-        delete data.option3;
-        delete data.option4;
-        isValid = true;
-      }
-
-      if (!isValid) {
-        alert('Please fill in required fields');
-        return;
-      }
-
-      // Add sticker to pending list
-      const sticker = {
-        type,
-        data,
-        position: { x: 50, y: 50 } // Default center position
-      };
-
-      pendingStickers.push(sticker);
-
-      // Show preview of sticker on the media
-      const stickerPreview = createStickerElement(sticker);
-      if (stickerPreview) {
-        stickerPreview.style.cursor = 'move';
-        preview.appendChild(stickerPreview);
-
-        // Make sticker draggable within preview
-        makeDraggable(stickerPreview, preview, sticker.position);
-      }
-
-      closeModal();
-    };
-
-    modalPanel.appendChild(modalTitle);
-    modalPanel.appendChild(form);
-    modalPanel.appendChild(actions);
-    modalOverlay.appendChild(modalPanel);
-    document.body.appendChild(modalOverlay);
-  }
-
-  // Make sticker draggable within preview
-  function makeDraggable(element, container, position) {
-    let isDragging = false;
-    let startX, startY, initialLeft, initialTop;
-
-    const startDrag = (clientX, clientY) => {
-      isDragging = true;
-      startX = clientX;
-      startY = clientY;
-      const rect = container.getBoundingClientRect();
-      initialLeft = (position.x / 100) * rect.width;
-      initialTop = (position.y / 100) * rect.height;
-    };
-
-    const updatePosition = (clientX, clientY) => {
-      const deltaX = clientX - startX;
-      const deltaY = clientY - startY;
-      const rect = container.getBoundingClientRect();
-
-      const newLeft = initialLeft + deltaX;
-      const newTop = initialTop + deltaY;
-
-      // Update position as percentage
-      position.x = Math.max(0, Math.min(100, (newLeft / rect.width) * 100));
-      position.y = Math.max(0, Math.min(100, (newTop / rect.height) * 100));
-
-      element.style.left = position.x + '%';
-      element.style.top = position.y + '%';
-    };
-
-    const endDrag = () => {
-      isDragging = false;
-    };
-
-    if ('PointerEvent' in window) {
-      element.style.touchAction = 'none';
-      element.addEventListener('pointerdown', (e) => {
-        if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
-        startDrag(e.clientX, e.clientY);
-        element.setPointerCapture(e.pointerId);
-        e.preventDefault();
-      });
-      element.addEventListener('pointermove', (e) => {
-        if (!isDragging) return;
-        updatePosition(e.clientX, e.clientY);
-      });
-      element.addEventListener('pointerup', endDrag);
-      element.addEventListener('pointercancel', endDrag);
-      return;
-    }
-
-    element.onmousedown = (e) => {
-      if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
-      startDrag(e.clientX, e.clientY);
-      e.preventDefault();
-    };
-
-    document.onmousemove = (e) => {
-      if (!isDragging) return;
-      updatePosition(e.clientX, e.clientY);
-    };
-
-    document.onmouseup = endDrag;
-  }
-
-  function storyIdsForActions(storyData) {
-    const currentStoryId = Viewer.currentItemStoryId?.();
-    if (currentStoryId) return [currentStoryId];
-    if (Array.isArray(storyData.story_ids) && storyData.story_ids.length > 0) {
-      return storyData.story_ids.map(id => parseInt(id, 10)).filter(id => id > 0);
-    }
-    const id = parseInt(storyData.story_id || 0, 10);
-    return id > 0 ? [id] : [];
-  }
-
-  function showStoryActions(storyData) {
-    const targetIds = storyIdsForActions(storyData);
-    const targetStoryId = targetIds[0];
-    if (!targetStoryId) {
-      Viewer.resumeStory();
-      return;
-    }
-    const overlay = el('div', {
-      class: 'koopo-stories__composer',
-      style: 'z-index:9999999;background:rgba(0,0,0,0.45);',
-      role: 'dialog',
-      'aria-modal': 'true',
-      tabindex: '-1'
-    });
-
-    const panel = el('div', {
-      class: 'koopo-stories__composer-panel',
-      style: 'max-width:360px;width:100%;'
-    });
-
-    const title = el('div', { class: 'koopo-stories__composer-title', html: t('story_settings', 'Story settings') });
-
-    const privacyWrap = el('div', { class: 'koopo-stories__composer-privacy', style: 'border-top:0;' });
-    const privacyLabel = el('label', { class: 'koopo-stories__composer-privacy-label' });
-    privacyLabel.textContent = t('privacy_label', 'Privacy');
-    const privacySelect = el('select', { class: 'koopo-stories__composer-privacy-select' });
-    ['public', 'friends', 'close_friends'].forEach((val) => {
-      const opt = el('option', { value: val });
-      opt.textContent = val === 'public' ? 'Public' : (val === 'friends' ? 'Friends Only' : 'Close Friends');
-      if ((storyData.privacy || 'friends') === val) opt.selected = true;
-      privacySelect.appendChild(opt);
-    });
-    privacyWrap.appendChild(privacyLabel);
-    privacyWrap.appendChild(privacySelect);
-
-    const actions = el('div', { class: 'koopo-stories__composer-actions' });
-    const cancelBtn = el('button', { class: 'koopo-stories__composer-cancel', type: 'button' });
-    cancelBtn.textContent = t('close', 'Close');
-    const saveBtn = el('button', { class: 'koopo-stories__composer-post', type: 'button' });
-    saveBtn.textContent = t('save', 'Save');
-    actions.appendChild(cancelBtn);
-    actions.appendChild(saveBtn);
-
-    const hideWrap = el('div', { style: 'padding:0 14px 14px 14px;border-top:1px solid rgba(255,255,255,.08);' });
-    const hideTitle = el('div', { style: 'font-size:13px;font-weight:600;margin:10px 0 6px 0;' });
-    hideTitle.textContent = t('hide_users_title', 'Hide from specific users');
-    const hideInputWrap = el('div', { style: 'position:relative;' });
-    const hideInput = el('input', {
-      type: 'text',
-      placeholder: t('search_username', 'Search by username'),
-      style: 'width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:#1a1a1a;color:#fff;'
-    });
-    const hideInputSpinner = el('div', { class: 'koopo-stories__spinner koopo-stories__spinner--sm koopo-stories__input-spinner' });
-    const hideDropdown = el('div', {
-      style: 'position:absolute;left:0;right:0;top:38px;background:#111;border:1px solid rgba(255,255,255,.1);border-radius:8px;max-height:200px;overflow:auto;display:none;z-index:5;'
-    });
-    hideInputWrap.appendChild(hideInput);
-    hideInputWrap.appendChild(hideInputSpinner);
-    hideInputWrap.appendChild(hideDropdown);
-    const hideAddBtn = el('button', {
-      type: 'button',
-      style: 'margin-top:8px;width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:#2a2a2a;color:#fff;font-weight:600;cursor:pointer;'
-    });
-    hideAddBtn.textContent = t('add_hidden', 'Add to hidden list');
-    const hideAddSpinner = el('span', { class: 'koopo-stories__spinner koopo-stories__spinner--sm koopo-stories__btn-spinner' });
-    hideAddBtn.appendChild(hideAddSpinner);
-    const hiddenList = el('div', { style: 'margin-top:10px;display:flex;flex-direction:column;gap:6px;position:relative;min-height:20px;' });
-    const hiddenListSpinner = el('div', { class: 'koopo-stories__spinner koopo-stories__spinner--sm koopo-stories__list-spinner' });
-    hiddenList.appendChild(hiddenListSpinner);
-    hideWrap.appendChild(hideTitle);
-    hideWrap.appendChild(hideInputWrap);
-    hideWrap.appendChild(hideAddBtn);
-    hideWrap.appendChild(hiddenList);
-
-    const deleteWrap = el('div', { style: 'padding:0 14px 14px 14px;' });
-    const deleteBtn = el('button', {
-      type: 'button',
-      style: 'width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#ff6b6b;font-weight:600;cursor:pointer;'
-    });
-    deleteBtn.textContent = t('delete_story', 'Delete story');
-    deleteWrap.appendChild(deleteBtn);
-
-    const archiveWrap = el('div', { style: 'padding:0 14px 14px 14px;' });
-    const archiveBtn = el('button', {
-      type: 'button',
-      style: 'width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#fff;font-weight:600;cursor:pointer;'
-    });
-    const isArchived = !!storyData.is_archived;
-    archiveBtn.textContent = isArchived ? t('unarchive_story', 'Unarchive story') : t('archive_story', 'Archive story');
-    archiveWrap.appendChild(archiveBtn);
-
-    const closeModal = (resume = true) => {
-      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-      if (resume) Viewer.resumeStory();
-    };
-
-    cancelBtn.onclick = () => closeModal(true);
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) closeModal(true);
-    });
-    overlay.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        closeModal(true);
-      }
-    });
-
-    saveBtn.onclick = async () => {
-      const ids = storyIdsForActions(storyData);
-      if (!ids.length) return closeModal(true);
-
-      const nextPrivacy = privacySelect.value;
-      saveBtn.disabled = true;
-      cancelBtn.disabled = true;
-      deleteBtn.disabled = true;
-      archiveBtn.disabled = true;
-      hideAddBtn.disabled = true;
-      try {
-        for (const id of ids) {
-          await apiRequest(`${API_BASE}/${id}`, 'PATCH', { privacy: nextPrivacy });
-        }
-        storyData.privacy = nextPrivacy;
-        document.querySelectorAll('.koopo-stories').forEach(c => refreshTray(c));
-        closeModal(true);
+        await openStoryFromTray(s.story_id, container, container?._myStoriesList || []);
+        b.setAttribute('data-seen', '1');
+        const badge = b.querySelector('.koopo-stories__badge');
+        if (badge) badge.remove();
       } catch (err) {
-        console.error('Failed to update privacy:', err);
-        alert('Failed to update privacy. Please try again.');
+        console.error('Failed to open story:', err);
+        showToast('Story content unavailable.');
       } finally {
-        saveBtn.disabled = false;
-        cancelBtn.disabled = false;
-        deleteBtn.disabled = false;
-        archiveBtn.disabled = false;
-        hideAddBtn.disabled = false;
-      }
-    };
-
-    archiveBtn.onclick = async () => {
-      const ids = storyIdsForActions(storyData);
-      if (!ids.length) return closeModal(true);
-
-      archiveBtn.disabled = true;
-      cancelBtn.disabled = true;
-      saveBtn.disabled = true;
-      deleteBtn.disabled = true;
-      hideAddBtn.disabled = true;
-      try {
-        const nextArchived = !storyData.is_archived;
-        for (const id of ids) {
-          await apiRequest(`${API_BASE}/${id}`, 'PATCH', { archive: nextArchived });
-        }
-        storyData.is_archived = nextArchived;
-        archiveBtn.textContent = nextArchived ? 'Unarchive story' : 'Archive story';
-        document.querySelectorAll('.koopo-stories').forEach(c => refreshTray(c));
-        closeModal(true);
-      } catch (err) {
-        console.error('Failed to update archive:', err);
-        alert('Failed to update archive. Please try again.');
-      } finally {
-        archiveBtn.disabled = false;
-        cancelBtn.disabled = false;
-        saveBtn.disabled = false;
-        deleteBtn.disabled = false;
-        hideAddBtn.disabled = false;
-      }
-    };
-
-    deleteBtn.onclick = async () => {
-      const ids = storyIdsForActions(storyData);
-      if (!ids.length) return closeModal(true);
-
-      const confirmText = ids.length > 1 ? 'Delete all active stories?' : 'Delete this story?';
-      if (!confirm(confirmText)) return;
-
-      saveBtn.disabled = true;
-      cancelBtn.disabled = true;
-      deleteBtn.disabled = true;
-      try {
-        for (const id of ids) {
-          await apiRequest(`${API_BASE}/${id}`, 'DELETE');
-        }
-        document.querySelectorAll('.koopo-stories').forEach(c => refreshTray(c));
-        closeModal(false);
-        Viewer.close();
-      } catch (err) {
-        console.error('Failed to delete story:', err);
-        alert('Failed to delete story. Please try again.');
-        saveBtn.disabled = false;
-        cancelBtn.disabled = false;
-        deleteBtn.disabled = false;
-        archiveBtn.disabled = false;
-        hideAddBtn.disabled = false;
-      }
-    };
-
-    function renderHiddenUsers(users) {
-      hiddenList.innerHTML = '';
-      hiddenList.appendChild(hiddenListSpinner);
-      hiddenListSpinner.style.display = 'none';
-      if (!users.length) {
-        const empty = el('div', { style: 'font-size:12px;opacity:0.7;' });
-        empty.textContent = t('no_hidden_users', 'No hidden users yet.');
-        hiddenList.appendChild(empty);
-        return;
-      }
-      users.forEach(u => {
-        const row = el('div', { style: 'display:flex;align-items:center;gap:8px;' });
-        const avatar = el('img', { src: u.avatar || '', style: 'width:28px;height:28px;border-radius:999px;object-fit:cover;' });
-        const label = el('div', { style: 'font-size:13px;flex:1;' });
-        label.textContent = `@${u.username || u.name || u.id}`;
-        const removeBtn = el('button', {
-          type: 'button',
-          style: 'padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.2);background:#222;color:#fff;font-size:12px;cursor:pointer;'
-        });
-        removeBtn.textContent = t('remove', 'Remove');
-        removeBtn.onclick = async () => {
-          removeBtn.disabled = true;
-          try {
-            hiddenListSpinner.style.display = 'block';
-            await apiRequest(`${API_BASE}/${targetStoryId}/hide/${u.id}`, 'DELETE');
-            await loadHiddenUsers();
-          } catch (err) {
-            console.error('Failed to remove hidden user:', err);
-            alert(t('remove_hidden_failed', 'Failed to remove user. Please try again.'));
-          } finally {
-            removeBtn.disabled = false;
-          }
-        };
-        row.appendChild(avatar);
-        row.appendChild(label);
-        row.appendChild(removeBtn);
-        hiddenList.appendChild(row);
-      });
-    }
-
-    async function loadHiddenUsers() {
-      hiddenListSpinner.style.display = 'block';
-      try {
-        const data = await apiGet(`${API_BASE}/${targetStoryId}/hide`);
-        renderHiddenUsers(data.users || []);
-      } catch (err) {
-        console.error('Failed to load hidden users:', err);
-      } finally {
-        hiddenListSpinner.style.display = 'none';
-      }
-    }
-
-    hideInput.oninput = async () => {
-      const query = hideInput.value.trim();
-      hideDropdown.innerHTML = '';
-      hideDropdown.style.display = 'none';
-      hideInput.dataset.userId = '';
-      hideInputSpinner.style.display = 'none';
-
-      if (query.length < 2) return;
-
-      try {
-        hideInputSpinner.style.display = 'block';
-        const response = await fetch(`${window.location.origin}/wp-json/buddyboss/v1/members?search=${encodeURIComponent(query)}&per_page=10`, {
-          method: 'GET',
-          headers: { 'X-WP-Nonce': window.KoopoStories?.nonce || '' }
-        });
-        if (!response.ok) throw new Error('Failed to fetch members');
-        const members = await response.json();
-        if (!members || members.length === 0) return;
-
-        members.forEach(member => {
-          const option = el('div', { style: 'padding:8px 10px;cursor:pointer;display:flex;align-items:center;gap:8px;' });
-          const avatar = el('img', { src: member.avatar_urls?.thumb || member.avatar_urls?.full || '', style: 'width:28px;height:28px;border-radius:999px;' });
-          const label = el('div', { style: 'font-size:13px;' });
-          label.textContent = `@${member.user_login || member.mention_name || ''} • ${member.name || ''}`;
-          option.appendChild(avatar);
-          option.appendChild(label);
-          option.onclick = () => {
-            hideInput.value = member.user_login || member.mention_name || member.name;
-            hideInput.dataset.userId = String(member.id || '');
-            hideDropdown.style.display = 'none';
-          };
-          hideDropdown.appendChild(option);
-        });
-        hideDropdown.style.display = 'block';
-      } catch (err) {
-        console.error('Failed to search members:', err);
-      } finally {
-        hideInputSpinner.style.display = 'none';
-      }
-    };
-
-    overlay.addEventListener('click', (e) => {
-      if (!hideInputWrap.contains(e.target)) {
-        hideDropdown.style.display = 'none';
+        loadingOverlay.remove();
       }
     });
 
-    hideAddBtn.onclick = async () => {
-      let uid = parseInt(hideInput.dataset.userId || '', 10);
-      if (!uid && /^\d+$/.test(hideInput.value.trim())) {
-        uid = parseInt(hideInput.value.trim(), 10);
-      }
-      if (!uid) {
-        alert(t('select_user_hide', 'Select a user to hide.'));
-        return;
-      }
-      hideAddBtn.disabled = true;
-      hideAddSpinner.style.display = 'inline-block';
-      try {
-        hiddenListSpinner.style.display = 'block';
-        await apiRequest(`${API_BASE}/${targetStoryId}/hide/${uid}`, 'POST');
-        hideInput.value = '';
-        hideInput.dataset.userId = '';
-        await loadHiddenUsers();
-      } catch (err) {
-        console.error('Failed to hide user:', err);
-        alert(t('hide_user_failed', 'Failed to hide user. Please try again.'));
-      } finally {
-        hideAddBtn.disabled = false;
-        hideAddSpinner.style.display = 'none';
-      }
-    };
-
-    panel.appendChild(title);
-    panel.appendChild(privacyWrap);
-    panel.appendChild(actions);
-    panel.appendChild(hideWrap);
-    panel.appendChild(archiveWrap);
-    panel.appendChild(deleteWrap);
-    overlay.appendChild(panel);
-    document.body.appendChild(overlay);
-    overlay.focus();
-
-    loadHiddenUsers();
-  }
-
-  // Show reaction picker
-  function showReactionPicker(storyId) {
-    const reactions = ['❤️', '😂', '😮', '😢', '👏', '🔥', '💩', '🤦🏽‍♂️', '👿', '🤯'];
-    const maxVisible = isMobile ? 6 : reactions.length;
-
-    const overlay = el('div', {
-      class: 'koopo-stories__composer',
-      style: 'z-index:9999999;background:rgba(0,0,0,0.3);',
-      role: 'dialog',
-      'aria-modal': 'true',
-      tabindex: '-1'
-    });
-
-    const picker = el('div', {
-      style: 'background:rgba(0,0,0,0.66);border-radius:50px;padding:12px 16px;display:flex;gap:8px;box-shadow:0 4px 20px rgba(0,0,0,0.3);flex-wrap:wrap;justify-content:center;max-width:90vw;'
-    });
-
-    const renderPicker = (count) => {
-      picker.innerHTML = '';
-      const visible = reactions.slice(0, count);
-      visible.forEach(emoji => {
-        const btn = el('button', {
-          style: `background:none;border:none;font-size:${isMobile ? '36px' : '32px'};cursor:pointer;padding:8px;transition:transform 0.2s;`,
-          type: 'button'
-        });
-        btn.textContent = emoji;
-        btn.onmouseover = () => { btn.style.transform = 'scale(1.2)'; };
-        btn.onmouseout = () => { btn.style.transform = 'scale(1)'; };
-        btn.onclick = async () => {
-          overlay.remove();
-          Viewer.resumeStory(); // Resume story after closing modal
-          try {
-            const fd = new FormData();
-            fd.append('reaction', emoji);
-            await apiPost(`${API_BASE}/${storyId}/reactions`, fd);
-            // Update reaction button to show user reacted
-            const viewer = document.querySelector('.koopo-stories__viewer');
-            if (viewer) {
-              const reactionBtn = viewer.querySelector('.koopo-stories__action-btn');
-              if (reactionBtn) {
-                reactionBtn.textContent = emoji;
-                reactionBtn.style.transform = 'scale(1.2)';
-                setTimeout(() => { reactionBtn.style.transform = 'scale(1)'; }, 200);
-              }
-            }
-          } catch(e) {
-            console.error('Failed to add reaction:', e);
-          }
-        };
-        picker.appendChild(btn);
-      });
-
-      if (isMobile && count < reactions.length) {
-        const moreBtn = el('button', {
-          style: 'background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);font-size:18px;color:#fff;border-radius:999px;padding:10px 14px;cursor:pointer;',
-          type: 'button'
-        });
-        moreBtn.textContent = '+';
-        moreBtn.onclick = () => renderPicker(reactions.length);
-        picker.appendChild(moreBtn);
-      }
-    };
-
-    renderPicker(maxVisible);
-
-    overlay.onclick = (e) => {
-      if (e.target === overlay) {
-        overlay.remove();
-        Viewer.resumeStory(); // Resume story if modal closed without selecting
-      }
-    };
-    overlay.appendChild(picker);
-    document.body.appendChild(overlay);
-    overlay.focus();
-
-    // Center the picker
-    requestAnimationFrame(() => {
-      picker.style.position = 'absolute';
-      picker.style.top = '50%';
-      picker.style.left = '50%';
-      picker.style.transform = 'translate(-50%, -50%)';
-    });
-  }
-
-  // Show reply modal
-  function showReplyModal(storyId, author) {
-    const overlay = el('div', { class: 'koopo-stories__composer', style: 'z-index:9999999;', role: 'dialog', 'aria-modal': 'true', tabindex: '-1' });
-    const panel = el('div', { class: 'koopo-stories__composer-panel' });
-    const title = el('div', { class: 'koopo-stories__composer-title' });
-    title.textContent = `Reply to ${author?.name || 'this story'}`;
-
-    const textarea = el('textarea', {
-      style: 'width:100%;min-height:120px;padding:12px;background:#2a2a2a;border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#fff;font-size:14px;resize:vertical;box-sizing:border-box;',
-      placeholder: 'Write a reply...'
-    });
-
-    const actions = el('div', { class: 'koopo-stories__composer-actions' });
-    const cancelBtn = el('button', { class: 'koopo-stories__composer-cancel' });
-    cancelBtn.textContent = 'Cancel';
-    const sendBtn = el('button', { class: 'koopo-stories__composer-post' });
-    sendBtn.textContent = 'Send';
-
-    const status = el('div', { class: 'koopo-stories__composer-status' });
-    status.setAttribute('aria-live', 'polite');
-
-    const close = () => {
-      overlay.remove();
-      Viewer.resumeStory(); // Resume story after closing modal
-    };
-
-    cancelBtn.addEventListener('click', close);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-    overlay.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        close();
-      }
-    });
-
-    sendBtn.addEventListener('click', async () => {
-      const message = textarea.value.trim();
-      if (!message) {
-        status.textContent = 'Please write a message';
-        return;
-      }
-
-      sendBtn.disabled = true;
-      cancelBtn.disabled = true;
-      status.textContent = 'Sending...';
-
-      try {
-        const fd = new FormData();
-        fd.append('message', message);
-        fd.append('is_dm', '1');
-        await apiPost(`${API_BASE}/${storyId}/replies`, fd);
-        status.textContent = 'Sent!';
-        setTimeout(close, 800);
-      } catch(e) {
-        status.textContent = e.message || 'Failed to send reply';
-        sendBtn.disabled = false;
-        cancelBtn.disabled = false;
-      }
-    });
-
-    actions.appendChild(cancelBtn);
-    actions.appendChild(sendBtn);
-
-    panel.appendChild(title);
-    panel.appendChild(el('div', { style: 'padding:14px;' }, [textarea]));
-    panel.appendChild(actions);
-    panel.appendChild(status);
-    overlay.appendChild(panel);
-    document.body.appendChild(overlay);
-    overlay.focus();
-
-    // Focus textarea
-    setTimeout(() => textarea.focus(), 100);
-  }
-
-  // Show report modal
-  function showReportModal(storyId, author) {
-    const overlay = el('div', { class: 'koopo-stories__composer', style: 'z-index:9999999;', role: 'dialog', 'aria-modal': 'true', tabindex: '-1' });
-    const panel = el('div', { class: 'koopo-stories__composer-panel' });
-    const title = el('div', { class: 'koopo-stories__composer-title' });
-    title.textContent = `Report ${author?.name || 'this story'}`;
-
-    const reasons = [
-      { value: 'spam', label: 'Spam' },
-      { value: 'inappropriate', label: 'Inappropriate content' },
-      { value: 'harassment', label: 'Harassment or bullying' },
-      { value: 'violence', label: 'Violence or dangerous content' },
-      { value: 'hate_speech', label: 'Hate speech' },
-      { value: 'false_info', label: 'False information' },
-      { value: 'other', label: 'Other' },
-    ];
-
-    const selectWrap = el('div', { style: 'padding:14px;' });
-    const reasonLabel = el('label', { style: 'display:block;margin-bottom:8px;font-size:14px;font-weight:500;' });
-    reasonLabel.textContent = 'Reason for reporting:';
-
-    const reasonSelect = el('select', {
-      style: 'width:100%;padding:10px;background:#2a2a2a;border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#fff;font-size:14px;'
-    });
-
-    reasons.forEach(r => {
-      const option = el('option', { value: r.value });
-      option.textContent = r.label;
-      reasonSelect.appendChild(option);
-    });
-
-    const textarea = el('textarea', {
-      style: 'width:100%;min-height:100px;padding:12px;background:#2a2a2a;border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#fff;font-size:14px;resize:vertical;box-sizing:border-box;margin-top:12px;',
-      placeholder: 'Additional details (optional)...'
-    });
-
-    selectWrap.appendChild(reasonLabel);
-    selectWrap.appendChild(reasonSelect);
-    selectWrap.appendChild(textarea);
-
-    const actions = el('div', { class: 'koopo-stories__composer-actions' });
-    const cancelBtn = el('button', { class: 'koopo-stories__composer-cancel' });
-    cancelBtn.textContent = 'Cancel';
-    const submitBtn = el('button', { class: 'koopo-stories__composer-post' });
-    submitBtn.textContent = 'Submit Report';
-
-    const status = el('div', { class: 'koopo-stories__composer-status' });
-    status.setAttribute('aria-live', 'polite');
-
-    const close = () => overlay.remove();
-
-    cancelBtn.addEventListener('click', close);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-    overlay.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        close();
-      }
-    });
-
-    submitBtn.addEventListener('click', async () => {
-      submitBtn.disabled = true;
-      cancelBtn.disabled = true;
-      status.textContent = 'Submitting report...';
-
-      try {
-        const fd = new FormData();
-        fd.append('reason', reasonSelect.value);
-        fd.append('description', textarea.value.trim());
-        await apiPost(`${API_BASE}/${storyId}/report`, fd);
-        status.textContent = 'Report submitted. Thank you.';
-        setTimeout(close, 1500);
-      } catch(e) {
-        status.textContent = e.message || 'Failed to submit report';
-        submitBtn.disabled = false;
-        cancelBtn.disabled = false;
-      }
-    });
-
-    actions.appendChild(cancelBtn);
-    actions.appendChild(submitBtn);
-
-    panel.appendChild(title);
-    panel.appendChild(selectWrap);
-    panel.appendChild(actions);
-    panel.appendChild(status);
-    overlay.appendChild(panel);
-    document.body.appendChild(overlay);
-    overlay.focus();
-  }
-
-  // Show viewer list modal
-  async function showViewerList(storyId) {
-    const overlay = el('div', { class: 'koopo-stories__composer', style: 'z-index:9999999;' });
-    const panel = el('div', { class: 'koopo-stories__composer-panel', style: 'max-height:80vh;overflow:hidden;' });
-    const title = el('div', { class: 'koopo-stories__composer-title' });
-    title.textContent = 'Viewers';
-
-    const listWrap = el('div', { style: 'max-height:60vh;overflow-y:auto;padding:12px 14px;' });
-    const loading = el('div', { class: 'koopo-stories__loader', style: 'position:relative;padding:40px;' });
-    const spinner = el('div', { class: 'koopo-stories__spinner' });
-    loading.appendChild(spinner);
-    listWrap.appendChild(loading);
-
-    const closeBtn = el('button', { class: 'koopo-stories__composer-cancel', style: 'margin:12px 14px;width:calc(100% - 28px);' });
-    closeBtn.textContent = 'Close';
-
-    const close = () => {
-      overlay.remove();
-      Viewer.resumeStory();
-    };
-    closeBtn.addEventListener('click', close);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-
-    panel.appendChild(title);
-    panel.appendChild(listWrap);
-    panel.appendChild(closeBtn);
-    overlay.appendChild(panel);
-    document.body.appendChild(overlay);
-
-    // Fetch viewer list
-    try {
-      const resp = await apiGet(`${API_BASE}/${storyId}/viewers`);
-      listWrap.innerHTML = '';
-
-      if (!resp.viewers || resp.viewers.length === 0) {
-        const empty = el('div', { style: 'text-align:center;padding:20px;opacity:0.6;' });
-        empty.textContent = 'No views yet';
-        listWrap.appendChild(empty);
-        return;
-      }
-
-      resp.viewers.forEach(viewer => {
-        const row = el('div', { style: 'display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.1);' });
-
-        const avatar = el('img', {
-          src: viewer.avatar,
-          style: 'width:40px;height:40px;border-radius:999px;'
-        });
-
-        const info = el('div', { style: 'flex:1;' });
-        const name = el('div', { style: 'font-weight:500;font-size:14px;' });
-        name.textContent = viewer.name;
-
-        const time = el('div', { style: 'font-size:12px;opacity:0.7;margin-top:2px;' });
-        const viewDate = new Date(viewer.viewed_at);
-        time.textContent = viewDate.toLocaleString();
-
-        info.appendChild(name);
-        info.appendChild(time);
-
-        row.appendChild(avatar);
-        row.appendChild(info);
-
-        if (viewer.profile_url) {
-          row.style.cursor = 'pointer';
-          row.onclick = () => window.open(viewer.profile_url, '_blank');
-        }
-
-        listWrap.appendChild(row);
-      });
-
-      // Show total count
-      if (resp.total_count > resp.viewers.length) {
-        const more = el('div', { style: 'text-align:center;padding:12px;opacity:0.6;font-size:13px;' });
-        more.textContent = `Showing ${resp.viewers.length} of ${resp.total_count} viewers`;
-        listWrap.appendChild(more);
-      }
-    } catch(e) {
-      listWrap.innerHTML = '';
-      const error = el('div', { style: 'text-align:center;padding:20px;color:#d63638;' });
-      error.textContent = 'Failed to load viewers';
-      listWrap.appendChild(error);
-    }
+    return b;
   }
 
   function init() {
@@ -2473,6 +611,18 @@
 
     window.addEventListener('scroll', onScroll, { passive: true });
   }
+
+  window.KoopoStoriesUI = {
+    API_BASE,
+    NONCE,
+    t,
+    isMobile,
+    apiGet,
+    apiPost,
+    apiRequest,
+    el,
+    refreshTray,
+  };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();

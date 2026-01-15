@@ -452,11 +452,11 @@ Phase 0 complete, moving to Phase 9
 
 ### Findings (Ordered by Severity)
 
-- **High**: Duplicate per‑request logic (upload limits, duration, max items) is copy‑pasted across endpoints. Extract shared helpers to avoid divergence. `includes/class-stories-rest.php`
-- **High**: Feed building still does per‑story meta calls (privacy, expires, cover thumb, author profile URL). Batch meta/authors or reduce default payload. `includes/class-stories-rest.php`
+- **High**: Duplicate per‑request logic (upload limits, duration, max items) is copy‑pasted across endpoints. Extract shared helpers to avoid divergence. `includes/stories/rest/class-stories-rest.php`
+- **High**: Feed building still does per‑story meta calls (privacy, expires, cover thumb, author profile URL). Batch meta/authors or reduce default payload. `includes/stories/rest/class-stories-rest.php`
 - **Medium**: Frontend logic is monolithic and mixes UI/data/interaction. Split into viewer/composer/settings/archive modules. `assets/stories.js`
 - **Medium**: CSS is monolithic with leftover rules; split by component or at least regroup sections. `assets/stories.css`
-- **Low**: Cache key doesn’t include all potential query params; use a centralized key builder. `includes/class-stories-rest.php`
+- **Low**: Cache key doesn’t include all potential query params; use a centralized key builder. `includes/stories/rest/class-stories-rest.php`
 - **Low**: `compact=1` applied to all GET requests on mobile; consider per‑call opt‑in for future endpoints. `assets/stories.js`
 
 ### Performance Improvements (Ideas)

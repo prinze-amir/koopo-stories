@@ -19,32 +19,32 @@ register_activation_hook(__FILE__, function () {
 
     // Install database tables for Stories feature
     // Load the module first to ensure all dependencies are available
-    if ( file_exists( KOOPO_STORIES_PATH . 'includes/class-stories-module.php' ) ) {
-        require_once KOOPO_STORIES_PATH . 'includes/class-stories-module.php';
+    if ( file_exists( KOOPO_STORIES_PATH . 'includes/stories/class-stories-module.php' ) ) {
+        require_once KOOPO_STORIES_PATH . 'includes/stories/class-stories-module.php';
 
         // Now load and install each table class
-        if ( file_exists( KOOPO_STORIES_PATH . 'includes/class-stories-views-table.php' ) ) {
-            require_once KOOPO_STORIES_PATH . 'includes/class-stories-views-table.php';
+        if ( file_exists( KOOPO_STORIES_PATH . 'includes/stories/class-stories-views-table.php' ) ) {
+            require_once KOOPO_STORIES_PATH . 'includes/stories/class-stories-views-table.php';
             Koopo_Stories_Views_Table::install();
         }
-        if ( file_exists( KOOPO_STORIES_PATH . 'includes/class-stories-close-friends.php' ) ) {
-            require_once KOOPO_STORIES_PATH . 'includes/class-stories-close-friends.php';
+        if ( file_exists( KOOPO_STORIES_PATH . 'includes/stories/class-stories-close-friends.php' ) ) {
+            require_once KOOPO_STORIES_PATH . 'includes/stories/class-stories-close-friends.php';
             Koopo_Stories_Close_Friends::install();
         }
-        if ( file_exists( KOOPO_STORIES_PATH . 'includes/class-stories-reactions.php' ) ) {
-            require_once KOOPO_STORIES_PATH . 'includes/class-stories-reactions.php';
+        if ( file_exists( KOOPO_STORIES_PATH . 'includes/engagement/class-stories-reactions.php' ) ) {
+            require_once KOOPO_STORIES_PATH . 'includes/engagement/class-stories-reactions.php';
             Koopo_Stories_Reactions::install();
         }
-        if ( file_exists( KOOPO_STORIES_PATH . 'includes/class-stories-replies.php' ) ) {
-            require_once KOOPO_STORIES_PATH . 'includes/class-stories-replies.php';
+        if ( file_exists( KOOPO_STORIES_PATH . 'includes/engagement/class-stories-replies.php' ) ) {
+            require_once KOOPO_STORIES_PATH . 'includes/engagement/class-stories-replies.php';
             Koopo_Stories_Replies::install();
         }
-        if ( file_exists( KOOPO_STORIES_PATH . 'includes/class-stories-reports.php' ) ) {
-            require_once KOOPO_STORIES_PATH . 'includes/class-stories-reports.php';
+        if ( file_exists( KOOPO_STORIES_PATH . 'includes/engagement/class-stories-reports.php' ) ) {
+            require_once KOOPO_STORIES_PATH . 'includes/engagement/class-stories-reports.php';
             Koopo_Stories_Reports::install();
         }
-        if ( file_exists( KOOPO_STORIES_PATH . 'includes/class-stories-stickers.php' ) ) {
-            require_once KOOPO_STORIES_PATH . 'includes/class-stories-stickers.php';
+        if ( file_exists( KOOPO_STORIES_PATH . 'includes/engagement/class-stories-stickers.php' ) ) {
+            require_once KOOPO_STORIES_PATH . 'includes/engagement/class-stories-stickers.php';
             Koopo_Stories_Stickers::install();
             Koopo_Stories_Stickers::install_poll_votes_table();
         }
@@ -66,8 +66,8 @@ add_action( 'plugins_loaded', function () {
     }
 
     // Load Stories module directly
-    if ( file_exists( KOOPO_STORIES_PATH . 'includes/class-stories-module.php' ) ) {
-        require_once KOOPO_STORIES_PATH . 'includes/class-stories-module.php';
+    if ( file_exists( KOOPO_STORIES_PATH . 'includes/stories/class-stories-module.php' ) ) {
+        require_once KOOPO_STORIES_PATH . 'includes/stories/class-stories-module.php';
 
         // Initialize the Stories module
         if ( class_exists( 'Koopo_Stories_Module' ) ) {
