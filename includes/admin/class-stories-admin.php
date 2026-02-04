@@ -138,6 +138,31 @@ final class Koopo_Stories_Admin
             'default' => '1',
         ]);
 
+        register_setting(self::SETTINGS_GROUP, 'koopo_stories_share_icon', [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) {
+                $allowed = ['share-one', 'share-two', 'share-three'];
+                return in_array($v, $allowed, true) ? $v : 'share-one';
+            },
+            'default' => 'share-one',
+        ]);
+
+        register_setting(self::SETTINGS_GROUP, 'koopo_stories_share_super_socializer_standard', [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) {
+                return ($v === '1') ? '1' : '0';
+            },
+            'default' => '1',
+        ]);
+
+        register_setting(self::SETTINGS_GROUP, 'koopo_stories_share_super_socializer_floating', [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) {
+                return ($v === '1') ? '1' : '0';
+            },
+            'default' => '1',
+        ]);
+
         // Defaults for widgets/shortcode/activity tray
         register_setting(self::SETTINGS_GROUP, 'koopo_stories_default_scope', [
             'type' => 'string',
@@ -218,6 +243,10 @@ final class Koopo_Stories_Admin
             echo '<p>' . esc_html__('Configure Stories behavior and limits.', 'koopo') . '</p>';
         }, self::SETTINGS_SLUG);
 
+        add_settings_section('koopo_stories_share', __('Share', 'koopo'), function () {
+            echo '<p>' . esc_html__('Configure "Share to Story" buttons and availability.', 'koopo') . '</p>';
+        }, self::SETTINGS_SLUG);
+
         add_settings_field('koopo_enable_stories', __('Enable Stories', 'koopo'), [__CLASS__, 'field_enable'], self::SETTINGS_SLUG, 'koopo_stories_core');
         add_settings_field('koopo_stories_default_privacy', __('Default Privacy', 'koopo'), [__CLASS__, 'field_privacy'], self::SETTINGS_SLUG, 'koopo_stories_core');
         add_settings_field('koopo_stories_duration_hours', __('Story Duration (hours)', 'koopo'), [__CLASS__, 'field_duration'], self::SETTINGS_SLUG, 'koopo_stories_core');
@@ -225,8 +254,11 @@ final class Koopo_Stories_Admin
         add_settings_field('koopo_stories_max_items_per_story', __('Max Items Per Story', 'koopo'), [__CLASS__, 'field_max_items'], self::SETTINGS_SLUG, 'koopo_stories_core');
         add_settings_field('koopo_stories_max_upload_size_mb', __('Max Upload Size (MB)', 'koopo'), [__CLASS__, 'field_max_size'], self::SETTINGS_SLUG, 'koopo_stories_core');
         add_settings_field('koopo_stories_allowed_mimes', __('Allowed File Types', 'koopo'), [__CLASS__, 'field_mimes'], self::SETTINGS_SLUG, 'koopo_stories_core');
-        add_settings_field('koopo_stories_share_enabled_types', __('Enable "Share to Story" for Post Types', 'koopo'), [__CLASS__, 'field_share_enabled_types'], self::SETTINGS_SLUG, 'koopo_stories_core');
-        add_settings_field('koopo_stories_share_enable_activity', __('Enable "Share to Story" for Activity', 'koopo'), [__CLASS__, 'field_share_enable_activity'], self::SETTINGS_SLUG, 'koopo_stories_core');
+        add_settings_field('koopo_stories_share_enabled_types', __('Enable "Share to Story" for Post Types', 'koopo'), [__CLASS__, 'field_share_enabled_types'], self::SETTINGS_SLUG, 'koopo_stories_share');
+        add_settings_field('koopo_stories_share_enable_activity', __('Enable "Share to Story" for Activity', 'koopo'), [__CLASS__, 'field_share_enable_activity'], self::SETTINGS_SLUG, 'koopo_stories_share');
+        add_settings_field('koopo_stories_share_icon', __('Share Button Icon', 'koopo'), [__CLASS__, 'field_share_icon'], self::SETTINGS_SLUG, 'koopo_stories_share');
+        add_settings_field('koopo_stories_share_super_socializer_standard', __('Super Socializer: Standard Interface', 'koopo'), [__CLASS__, 'field_share_super_socializer_standard'], self::SETTINGS_SLUG, 'koopo_stories_share');
+        add_settings_field('koopo_stories_share_super_socializer_floating', __('Super Socializer: Floating Interface', 'koopo'), [__CLASS__, 'field_share_super_socializer_floating'], self::SETTINGS_SLUG, 'koopo_stories_share');
         add_settings_field('koopo_stories_rate_limit_reactions', __('Rate Limit: Reactions (per hour)', 'koopo'), [__CLASS__, 'field_rate_limit_reactions'], self::SETTINGS_SLUG, 'koopo_stories_core');
         add_settings_field('koopo_stories_rate_limit_replies', __('Rate Limit: Replies (per hour)', 'koopo'), [__CLASS__, 'field_rate_limit_replies'], self::SETTINGS_SLUG, 'koopo_stories_core');
         add_settings_field('koopo_stories_rate_limit_reports', __('Rate Limit: Reports (per hour)', 'koopo'), [__CLASS__, 'field_rate_limit_reports'], self::SETTINGS_SLUG, 'koopo_stories_core');
@@ -559,6 +591,65 @@ final class Koopo_Stories_Admin
             '<label><input type="checkbox" name="koopo_stories_share_enable_activity" value="1" %s /> %s</label>',
             checked('1', $v, false),
             esc_html__('Show "Share to Story" in BuddyBoss activity entries.', 'koopo')
+        );
+    }
+
+    public static function field_share_icon(): void
+    {
+        $value = get_option('koopo_stories_share_icon', 'share-one');
+        $icons = [
+            'share-one' => 'icons/koopo-share-one.png',
+            'share-two' => 'icons/koopo-share-two.png',
+            'share-three' => 'icons/koopo-share-three.png',
+        ];
+        $labels = [
+            'share-one' => __('Koopo – Share One', 'koopo'),
+            'share-two' => __('Koopo – Share Two', 'koopo'),
+            'share-three' => __('Koopo – Share Three', 'koopo'),
+        ];
+
+        echo '<div style="display:flex; gap:18px; flex-wrap:wrap;">';
+        foreach ($icons as $key => $file) {
+            $path = KOOPO_STORIES_PATH . 'assets/' . $file;
+            $url = plugins_url('assets/' . $file, KOOPO_STORIES_PATH . 'koopo-stories.php');
+            $img = file_exists($path)
+                ? sprintf('<img src="%s" alt="%s" style="width:28px;height:28px;display:block;" />', esc_url($url), esc_attr($labels[$key]))
+                : '<span style="display:inline-block;width:28px;height:28px;background:#f1f1f1;border-radius:6px;line-height:28px;text-align:center;">?</span>';
+
+            printf(
+                '<label style="display:flex;align-items:center;gap:8px;border:1px solid #dcdcde;border-radius:8px;padding:6px 10px;cursor:pointer;">
+                    <input type="radio" name="koopo_stories_share_icon" value="%s" %s />
+                    <span>%s</span>
+                    %s
+                </label>',
+                esc_attr($key),
+                checked($value, $key, false),
+                esc_html($labels[$key]),
+                $img
+            );
+        }
+        echo '</div>';
+        echo '<p class="description">' . esc_html__('Select which icon to use for the "Share to Story" button.', 'koopo') . '</p>';
+        echo '<p class="description">' . esc_html__('Expected files in assets/icons/: koopo-share-one.png, koopo-share-two.png, koopo-share-three.png.', 'koopo') . '</p>';
+    }
+
+    public static function field_share_super_socializer_standard(): void
+    {
+        $v = get_option('koopo_stories_share_super_socializer_standard', '1');
+        printf(
+            '<label><input type="checkbox" name="koopo_stories_share_super_socializer_standard" value="1" %s /> %s</label>',
+            checked('1', $v, false),
+            esc_html__('Inject "Share to Story" into Super Socializer standard share bar (if enabled).', 'koopo')
+        );
+    }
+
+    public static function field_share_super_socializer_floating(): void
+    {
+        $v = get_option('koopo_stories_share_super_socializer_floating', '1');
+        printf(
+            '<label><input type="checkbox" name="koopo_stories_share_super_socializer_floating" value="1" %s /> %s</label>',
+            checked('1', $v, false),
+            esc_html__('Inject "Share to Story" into Super Socializer floating share bar (if enabled).', 'koopo')
         );
     }
 

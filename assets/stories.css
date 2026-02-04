@@ -65,6 +65,38 @@
     background: #00000033 !important;
     color: #ffff;
 }
+
+.koopo-share-icon-btn {
+  padding: 0;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.koopo-share-icon-btn .koopo-share-icon,
+.koopo-share-icon-btn .dashicons {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
+.koopo-share-icon-btn .dashicons {
+  font-size: 20px;
+}
+
+.koopo-share-icon-btn .share-label {
+  font-size: 12px;
+  margin-left: 6px;
+}
+
+.koopo-ss-share-icon {
+  background-color: transparent;
+}
 .koopo-stories__avatar{position:relative;}
 .koopo-stories__badge{position:absolute;right:-4px;top:-4px;min-width:18px;padding:1px 7px;border-radius:999px;background:#d63638;color:#fff;font-size:12px;line-height:18px;text-align:center;border:2px solid #fff;box-sizing:border-box;}
 .koopo-stories__privacy-icon{position:absolute;bottom:-2px;right:-2px;width:20px;height:20px;border-radius:999px;background:rgba(0,0,0,.75);color:#fff;font-size:11px;line-height:20px;text-align:center;border:2px solid #fff;box-sizing:border-box;display:flex;align-items:center;justify-content:center;}

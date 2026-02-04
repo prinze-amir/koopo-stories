@@ -7,6 +7,46 @@
     }
 
     function initShareButtons() {
+        const inferExtFromMime = (mime) => {
+            const map = {
+                'image/jpeg': 'jpg',
+                'image/jpg': 'jpg',
+                'image/png': 'png',
+                'image/webp': 'webp',
+                'image/gif': 'gif',
+                'video/mp4': 'mp4',
+                'video/webm': 'webm',
+                'video/quicktime': 'mov',
+            };
+            return map[mime] || 'bin';
+        };
+
+        const detectMediaFromActivity = (activityEntry) => {
+            if (!activityEntry) return { url: '', kind: '' };
+
+            // 1) Images first
+            const mediaImg = activityEntry.querySelector('.bp-activity-media img, .activity-inner img, .bp-activity-content img');
+            if (mediaImg && mediaImg.src) {
+                return { url: mediaImg.src, kind: 'image' };
+            }
+
+            // 2) Videos (BuddyBoss video posts / GIF-as-video)
+            const videoEl = activityEntry.querySelector('.bp-activity-media video, .activity-inner video, .bp-activity-content video');
+            if (videoEl) {
+                const src = videoEl.currentSrc || videoEl.src || (videoEl.querySelector('source') ? videoEl.querySelector('source').src : '');
+                if (src) return { url: src, kind: 'video' };
+            }
+
+            // 3) Background image fallbacks used by some activity cards
+            const bgNode = activityEntry.querySelector('[style*="background-image"]');
+            if (bgNode && bgNode.style && bgNode.style.backgroundImage) {
+                const match = bgNode.style.backgroundImage.match(/url\\((['"]?)(.*?)\\1\\)/i);
+                if (match && match[2]) return { url: match[2], kind: 'image' };
+            }
+
+            return { url: '', kind: '' };
+        };
+
         const handler = async (e) => {
             // Check if clicked element or parent is the button (for icon clicks)
             const btn = e.target.closest('.koopo-share-to-story');
@@ -18,37 +58,42 @@
 
             if (btn.disabled) return;
 
-            // Ensure Composer loader is available
-            if (!window.KoopoStoriesUI || !window.KoopoStoriesUI.ensureComposer) {
+            const waitForStoriesUI = async (timeoutMs = 2500) => {
+                const start = Date.now();
+                while (Date.now() - start < timeoutMs) {
+                    if (window.KoopoStoriesUI && window.KoopoStoriesUI.ensureComposer) {
+                        return true;
+                    }
+                    await new Promise(r => setTimeout(r, 50));
+                }
+                return false;
+            };
+            if (!(await waitForStoriesUI())) {
                 console.error('Stories UI not loaded');
                 alert('Stories module not ready yet. Please try again in a moment.');
                 return;
             }
 
-            let imgUrl = btn.dataset.img;
+            let mediaUrl = btn.dataset.img;
+            let mediaKind = '';
             const linkUrl = btn.dataset.link || btn.dataset.activityLink || '';
             const title = btn.dataset.title || 'Shared Activity';
             const activityId = btn.dataset.activityId;
 
             // Handle auto image detection (e.g. for activity feed)
-            if (imgUrl === 'auto') {
+            if (mediaUrl === 'auto') {
                 // Find closest activity entry
                 let activityEntry = btn.closest('.activity-item') || btn.closest('.bp-activity-entry') || btn.closest('li.activity-item');
                 if (!activityEntry && activityId) {
                     activityEntry = document.querySelector(`[data-bp-activity-id="${activityId}"]`) || document.querySelector(`#activity-${activityId}`);
                 }
-                if (activityEntry) {
-                    // Try to find an image in activity content or media
-                    // Prioritize activity media
-                    const mediaImg = activityEntry.querySelector('.bp-activity-media img, .activity-inner img, .bp-activity-content img');
-                    if (mediaImg) {
-                        imgUrl = mediaImg.src;
-                    }
-                }
+                const detected = detectMediaFromActivity(activityEntry);
+                mediaUrl = detected.url;
+                mediaKind = detected.kind;
             }
 
-            if (!imgUrl || imgUrl === 'auto') {
-                alert('No image found to share in this post type.');
+            if (!mediaUrl || mediaUrl === 'auto') {
+                alert('No media found to share in this post.');
                 return;
             }
 
@@ -62,12 +107,14 @@
                 const composer = await window.KoopoStoriesUI.ensureComposer();
 
                 // Fetch image to blob
-                const response = await fetch(imgUrl);
-                if (!response.ok) throw new Error('Failed to load image');
+                const response = await fetch(mediaUrl);
+                if (!response.ok) throw new Error('Failed to load media');
                 const blob = await response.blob();
 
                 // Create File object
-                const file = new File([blob], 'share-story.jpg', { type: blob.type });
+                const mime = blob.type || (mediaKind === 'video' ? 'video/mp4' : 'image/jpeg');
+                const ext = inferExtFromMime(mime);
+                const file = new File([blob], `share-story.${ext}`, { type: mime });
 
                 // Prepare stickers
                 const stickers = [];
