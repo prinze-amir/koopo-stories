@@ -44,7 +44,7 @@
     });
     if (!res.ok) {
       let msg = 'Request failed';
-      try { const j = await res.json(); msg = j.message || j.error || msg; } catch(e){}
+      try { const j = await res.json(); msg = j.message || j.error || msg; } catch (e) { }
       throw new Error(msg);
     }
     return res.json();
@@ -63,7 +63,7 @@
     });
     if (!res.ok) {
       let msg = 'Request failed';
-      try { const j = await res.json(); msg = j.message || j.error || msg; } catch(e){}
+      try { const j = await res.json(); msg = j.message || j.error || msg; } catch (e) { }
       throw new Error(msg);
     }
     return res.json();
@@ -71,7 +71,7 @@
 
   function el(tag, attrs = {}, children = []) {
     const node = document.createElement(tag);
-    Object.entries(attrs).forEach(([k,v]) => {
+    Object.entries(attrs).forEach(([k, v]) => {
       if (k === 'class') node.className = v;
       else if (k.startsWith('data-')) node.setAttribute(k, v);
       else if (k === 'html') node.innerHTML = v;
@@ -225,9 +225,9 @@
   function prefetchStoryData(storyData) {
     if (!storyData) return;
     if (Array.isArray(storyData.story_ids) && storyData.story_ids.length > 1) {
-      storyData.story_ids.forEach((sid) => fetchStoryCached(sid).catch(() => {}));
+      storyData.story_ids.forEach((sid) => fetchStoryCached(sid).catch(() => { }));
     } else if (storyData.story_id) {
-      fetchStoryCached(storyData.story_id).catch(() => {});
+      fetchStoryCached(storyData.story_id).catch(() => { });
     }
   }
 
@@ -378,9 +378,9 @@
       container.dataset.archivePage = '1';
       container.dataset.archiveHasMore = '1';
       container.dataset.archiveLoading = '1';
-      return loadArchiveTray(container, { page: 1 }).catch(()=>{});
+      return loadArchiveTray(container, { page: 1 }).catch(() => { });
     }
-    return loadTray(container).catch(()=>{});
+    return loadTray(container).catch(() => { });
   }
 
   let openedFromUrl = false;
@@ -569,7 +569,7 @@
           await openStoryFromTray(storyId, container);
 
           // update ring locally
-          b.setAttribute('data-seen','1');
+          b.setAttribute('data-seen', '1');
           const badge = b.querySelector('.koopo-stories__badge');
           if (badge) badge.remove();
         } catch (err) {
@@ -679,6 +679,7 @@
     apiRequest,
     el,
     refreshTray,
+    ensureComposer,
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

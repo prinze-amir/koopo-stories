@@ -281,7 +281,7 @@
 
     function buildBars(n) {
       barsWrap.innerHTML = '';
-      for (let i=0;i<n;i++) {
+      for (let i = 0; i < n; i++) {
         const fill = el('i');
         const bar = el('div', { class: 'koopo-stories__bar' }, [fill]);
         barsWrap.appendChild(bar);
@@ -301,7 +301,7 @@
     }
 
     async function markSeen(itemId) {
-      try { await apiPost(`${API_BASE}/items/${itemId}/seen`, null); } catch(e) {}
+      try { await apiPost(`${API_BASE}/items/${itemId}/seen`, null); } catch (e) { }
     }
 
     function playItem(i) {
@@ -311,7 +311,7 @@
       if (!items[itemIndex]) { close(); return; }
 
       // Fill previous bars
-      for (let b=0;b<items.length;b++) setBar(b, b < itemIndex ? 100 : 0);
+      for (let b = 0; b < items.length; b++) setBar(b, b < itemIndex ? 100 : 0);
 
       const item = items[itemIndex];
       updateAnalyticsForItem(item);
@@ -373,7 +373,7 @@
         // Show mute button for videos
         muteBtn.style.display = 'block';
 
-        vid.play().catch(()=>{});
+        vid.play().catch(() => { });
       } else {
         const img = document.createElement('img');
         img.className = 'koopo-stories__media';
@@ -468,7 +468,7 @@
           // Single story, just fetch it
           return await apiGet(`${API_BASE}/${storyData.story_id}`);
         }
-      } catch(e) {
+      } catch (e) {
         console.error('Failed to load user stories:', e);
         return null;
       }
@@ -673,19 +673,19 @@
           }
           break;
 
-      case 'poll':
-        content = createPollSticker(sticker);
-        break;
-      case 'text':
-        content = el('div', {
-          class: 'koopo-stories__sticker-text',
-          style: 'background:rgba(0,0,0,0.6);color:#fff;padding:10px 14px;border-radius:12px;font-size:16px;font-weight:600;max-width:240px;text-align:center;'
-        });
-        content.textContent = sticker.data.text || '';
-        break;
+        case 'poll':
+          content = createPollSticker(sticker);
+          break;
+        case 'text':
+          content = el('div', {
+            class: 'koopo-stories__sticker-text',
+            style: 'background:rgba(0,0,0,0.6);color:#fff;padding:10px 14px;border-radius:12px;font-size:16px;font-weight:600;max-width:240px;text-align:center;'
+          });
+          content.textContent = sticker.data.text || '';
+          break;
 
-      default:
-        return null;
+        default:
+          return null;
       }
 
       if (content) {
@@ -880,7 +880,7 @@
       style: 'width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#fff;font-weight:600;cursor:pointer;'
     });
     const isArchived = !!storyData.is_archived;
-    archiveBtn.textContent = isArchived ? t('unarchive_story', 'Unarchive story') : t('archive_story', 'Archive story');
+    archiveBtn.textContent = isArchived ? t('unarchive_story', 'Repost story') : t('archive_story', 'Archive story');
     archiveWrap.appendChild(archiveBtn);
 
     const closeModal = (resume = true) => {
@@ -942,7 +942,7 @@
           await apiRequest(`${API_BASE}/${id}`, 'PATCH', { archive: nextArchived });
         }
         storyData.is_archived = nextArchived;
-        archiveBtn.textContent = nextArchived ? 'Unarchive story' : 'Archive story';
+        archiveBtn.textContent = nextArchived ? 'Repost story' : 'Archive story';
         closeModal(true);
       } catch (err) {
         console.error('Failed to update archive:', err);
@@ -1145,7 +1145,7 @@
               Viewer.resumeStory();
             }
             overlay.remove();
-          } catch(e) {
+          } catch (e) {
             console.error('Failed to react:', e);
           }
         };
@@ -1170,7 +1170,7 @@
     cancelBtn.onclick = () => { overlay.remove(); Viewer.resumeStory(); };
     actions.appendChild(cancelBtn);
 
-   // panel.appendChild(title);
+    // panel.appendChild(title);
     panel.appendChild(buttonsWrap);
     panel.appendChild(actions);
     overlay.appendChild(panel);
@@ -1225,7 +1225,7 @@
         await apiPost(`${API_BASE}/${storyId}/replies`, fd);
         status.textContent = 'Reply sent.';
         setTimeout(close, 1000);
-      } catch(e) {
+      } catch (e) {
         status.textContent = e.message || 'Failed to send reply';
         sendBtn.disabled = false;
         cancelBtn.disabled = false;
@@ -1304,7 +1304,7 @@
         await apiPost(`${API_BASE}/${storyId}/report`, fd);
         status.textContent = 'Report submitted. Thank you.';
         setTimeout(close, 1500);
-      } catch(e) {
+      } catch (e) {
         status.textContent = e.message || 'Failed to submit report';
         submitBtn.disabled = false;
         cancelBtn.disabled = false;
@@ -1407,7 +1407,7 @@
         more.textContent = `Showing ${resp.viewers.length} of ${resp.total_count} viewers`;
         listWrap.appendChild(more);
       }
-    } catch(e) {
+    } catch (e) {
       listWrap.innerHTML = '';
       const error = el('div', { style: 'text-align:center;padding:20px;color:#d63638;' });
       error.textContent = 'Failed to load viewers';

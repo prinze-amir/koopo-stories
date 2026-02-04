@@ -35,7 +35,7 @@
     input.click();
   }
 
-  function openComposer(file) {
+  function openComposer(file, options = {}) {
     // Simple preview + confirm composer (MVP+)
     const overlay = el('div', { class: 'koopo-stories__composer', role: 'dialog', 'aria-modal': 'true', tabindex: '-1' });
     const panel = el('div', { class: 'koopo-stories__composer-panel' });
@@ -134,11 +134,26 @@
     actions.appendChild(postBtn);
 
     function close() {
-      try { URL.revokeObjectURL(url); } catch(e) {}
+      try { URL.revokeObjectURL(url); } catch (e) { }
       overlay.remove();
     }
 
     cancelBtn.addEventListener('click', close);
+
+    // Process initial stickers
+    if (options.stickers && Array.isArray(options.stickers)) {
+      setTimeout(() => {
+        options.stickers.forEach(s => {
+          pendingStickers.push(s);
+          const stickerPreview = createStickerElement(s);
+          if (stickerPreview) {
+            stickerPreview.style.cursor = 'move';
+            preview.appendChild(stickerPreview);
+            makeDraggable(stickerPreview, preview, s.position);
+          }
+        });
+      }, 100);
+    }
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
     overlay.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
@@ -185,7 +200,7 @@
         // Refresh all trays/widgets on page
         document.querySelectorAll('.koopo-stories').forEach(c => refreshTray(c));
         setTimeout(close, 400);
-      } catch(e) {
+      } catch (e) {
         status.textContent = e.message || 'Upload failed';
         cancelBtn.disabled = false;
         postBtn.disabled = false;
