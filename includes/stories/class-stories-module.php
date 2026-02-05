@@ -170,6 +170,7 @@ final class Koopo_Stories_Module
         $this->assets_enqueued = true;
 
         wp_enqueue_style('koopo-stories');
+        wp_enqueue_style('dashicons');
         wp_enqueue_script('koopo-stories');
 
         $current_user_id = get_current_user_id();
@@ -200,6 +201,23 @@ final class Koopo_Stories_Module
             'delete_story' => __('Delete story', 'koopo'),
             'archive_story' => __('Archive story', 'koopo'),
             'unarchive_story' => __('Repost story', 'koopo'),
+        ]);
+
+        $lottie_raw = (string) get_option('koopo_stories_stickers_lottie_library', '');
+        $lottie_urls = array_values(array_filter(array_map('trim', preg_split('/\R+/', $lottie_raw))));
+        wp_localize_script('koopo-stories', 'KoopoStoriesStickerProviders', [
+            'giphy' => [
+                'enabled' => get_option('koopo_stories_stickers_giphy_enabled', '0') === '1',
+                'apiKey' => (string) get_option('koopo_stories_stickers_giphy_api_key', ''),
+            ],
+            'tenor' => [
+                'enabled' => get_option('koopo_stories_stickers_tenor_enabled', '0') === '1',
+                'apiKey' => (string) get_option('koopo_stories_stickers_tenor_api_key', ''),
+            ],
+            'lottie' => [
+                'enabled' => get_option('koopo_stories_stickers_lottie_enabled', '0') === '1',
+                'library' => array_slice($lottie_urls, 0, 60),
+            ],
         ]);
     }
 

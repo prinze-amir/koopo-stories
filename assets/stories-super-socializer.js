@@ -34,6 +34,16 @@
     (container && container.dataset && container.dataset.superSocializerHref) ||
     window.location.href;
 
+  const getActivityId = (container) => {
+    const entry = container && container.closest('.activity-item, .bp-activity-entry, [data-bp-activity-id], [id^="activity-"]');
+    if (!entry) return '';
+    const byData = entry.getAttribute('data-bp-activity-id') || entry.getAttribute('data-activity-id');
+    if (byData) return byData;
+    const id = entry.id || '';
+    const m = id.match(/activity[-_](\d+)/i);
+    return m ? m[1] : '';
+  };
+
   const buildButton = (container) => {
     const a = document.createElement('a');
     a.href = 'javascript:void(0)';
@@ -42,6 +52,10 @@
     a.dataset.link = getShareUrl(container);
     a.dataset.title = getShareTitle();
     a.dataset.type = 'super_socializer';
+    const activityId = getActivityId(container);
+    if (activityId) {
+      a.dataset.activityId = activityId;
+    }
 
     const img = getShareImage(container);
     if (img) {

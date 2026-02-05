@@ -470,7 +470,7 @@
     }
     const views = el('div', { class: 'koopo-stories__archive-views' });
     const viewCount = typeof s.view_count === 'number' ? s.view_count : 0;
-    views.textContent = `👀 ${viewCount}`;
+    views.innerHTML = `<span class="dashicons dashicons-visibility"></span> ${viewCount}`;
     meta.appendChild(title);
     meta.appendChild(date);
     meta.appendChild(views);

@@ -7,6 +7,8 @@
     }
 
     function initShareButtons() {
+        const shareCfg = window.KoopoStoriesShare || {};
+
         const inferExtFromMime = (mime) => {
             const map = {
                 'image/jpeg': 'jpg',
@@ -47,6 +49,79 @@
             return { url: '', kind: '' };
         };
 
+        const parseActivityIdFromLink = (link) => {
+            if (!link) return 0;
+            const m = String(link).match(/\/activity\/(?:p\/)?(\d+)(?:\/|$|\?)/i);
+            return m ? parseInt(m[1], 10) || 0 : 0;
+        };
+
+        const readIdFromNode = (node) => {
+            if (!node) return 0;
+            const candidates = [
+                node.dataset && (node.dataset.bpActivityId || node.dataset.activityId || node.dataset.activityid),
+                node.getAttribute && node.getAttribute('data-bp-activity-id'),
+                node.getAttribute && node.getAttribute('data-activity-id'),
+            ];
+            for (const c of candidates) {
+                const n = parseInt(c || '', 10);
+                if (n > 0) return n;
+            }
+            const idAttr = node.id || '';
+            const idMatch = idAttr.match(/activity[-_](\d+)/i);
+            if (idMatch) return parseInt(idMatch[1], 10) || 0;
+            return 0;
+        };
+
+        const detectActivityId = (btn) => {
+            const direct = parseInt(btn.dataset.activityId || btn.dataset.bpActivityId || '', 10);
+            if (direct > 0) return direct;
+
+            const contexts = [
+                btn.closest('[data-bp-activity-id]'),
+                btn.closest('[data-activity-id]'),
+                btn.closest('.activity-item'),
+                btn.closest('.bp-activity-entry'),
+                btn.closest('[id^="activity-"]'),
+                document.querySelector('.bb-modal [data-bp-activity-id], .buddypress-wrap [data-bp-activity-id]'),
+            ];
+            for (const node of contexts) {
+                const found = readIdFromNode(node);
+                if (found > 0) return found;
+            }
+
+            const fromLink = parseActivityIdFromLink(btn.dataset.link || btn.dataset.activityLink || '');
+            if (fromLink > 0) return fromLink;
+
+            const canonical = document.querySelector('link[rel="canonical"]');
+            return parseActivityIdFromLink(canonical ? canonical.href : '');
+        };
+
+        const fetchActivityMedia = async (activityId) => {
+            if (!activityId || !shareCfg.ajaxUrl || !shareCfg.nonce) return { url: '', kind: '' };
+            const form = new FormData();
+            form.append('action', 'koopo_stories_get_activity_media');
+            form.append('activity_id', String(activityId));
+            form.append('nonce', shareCfg.nonce);
+            const res = await fetch(shareCfg.ajaxUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                body: form,
+            });
+            if (!res.ok) return { url: '', kind: '' };
+            const payload = await res.json();
+            if (!payload || !payload.success || !payload.data || !payload.data.url) return { url: '', kind: '' };
+            return { url: payload.data.url, kind: payload.data.kind || '' };
+        };
+
+        const buildActivityProxyUrl = (activityId) => {
+            if (!activityId || !shareCfg.ajaxUrl || !shareCfg.nonce) return '';
+            const url = new URL(shareCfg.ajaxUrl, window.location.origin);
+            url.searchParams.set('action', 'koopo_stories_get_activity_media_file');
+            url.searchParams.set('activity_id', String(activityId));
+            url.searchParams.set('nonce', shareCfg.nonce);
+            return url.toString();
+        };
+
         const handler = async (e) => {
             // Check if clicked element or parent is the button (for icon clicks)
             const btn = e.target.closest('.koopo-share-to-story');
@@ -78,7 +153,7 @@
             let mediaKind = '';
             const linkUrl = btn.dataset.link || btn.dataset.activityLink || '';
             const title = btn.dataset.title || 'Shared Activity';
-            const activityId = btn.dataset.activityId;
+            const activityId = detectActivityId(btn);
 
             // Handle auto image detection (e.g. for activity feed)
             if (mediaUrl === 'auto') {
@@ -90,6 +165,12 @@
                 const detected = detectMediaFromActivity(activityEntry);
                 mediaUrl = detected.url;
                 mediaKind = detected.kind;
+
+                if ((!mediaUrl || mediaUrl === 'auto') && activityId) {
+                    const serverDetected = await fetchActivityMedia(activityId);
+                    mediaUrl = serverDetected.url;
+                    mediaKind = mediaKind || serverDetected.kind;
+                }
             }
 
             if (!mediaUrl || mediaUrl === 'auto') {
@@ -106,8 +187,15 @@
                 // Load composer module
                 const composer = await window.KoopoStoriesUI.ensureComposer();
 
-                // Fetch image to blob
-                const response = await fetch(mediaUrl);
+                // Fetch media blob (prefer authenticated server proxy for BuddyBoss activity media)
+                const proxyUrl = buildActivityProxyUrl(activityId);
+                let response = null;
+                if (proxyUrl) {
+                    response = await fetch(proxyUrl, { credentials: 'same-origin' });
+                }
+                if (!response || !response.ok) {
+                    response = await fetch(mediaUrl, { credentials: 'same-origin' });
+                }
                 if (!response.ok) throw new Error('Failed to load media');
                 const blob = await response.blob();
 

@@ -29,7 +29,6 @@
     let reactionBurstActive = false;
     let pendingAdvance = false;
     let canManageStory = false;
-
     function ensure() {
       if (root) return;
       barsWrap = el('div', { class: 'koopo-stories__progress' });
@@ -54,13 +53,13 @@
       statsWrap.appendChild(reactionCount);
 
       muteBtn = el('button', { class: 'koopo-stories__mute', type: 'button', style: 'background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:0 10px;opacity:0.7;', title: 'Toggle sound', 'aria-label': 'Toggle sound' });
-      muteBtn.textContent = '🔇';
+      muteBtn.innerHTML = '<span class="dashicons dashicons-controls-volumeoff"></span>';
       reportBtn = el('button', { class: 'koopo-stories__report', type: 'button', style: 'background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:0 10px;opacity:0.7;', title: 'Report this story', 'aria-label': 'Report this story' });
-      reportBtn.textContent = '⚠';
+      reportBtn.innerHTML = '<span class="dashicons dashicons-warning"></span>';
       actionsBtn = el('button', { class: 'koopo-stories__actions', type: 'button', style: 'background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:0 8px;opacity:0.8;', title: 'Story options', 'aria-label': 'Story options' });
-      actionsBtn.textContent = '. . .';
+      actionsBtn.innerHTML = '<span class="dashicons dashicons-ellipsis"></span>';
       closeBtn = el('button', { class: 'koopo-stories__close', type: 'button', 'aria-label': 'Close story viewer' }, []);
-      closeBtn.textContent = 'X';
+      closeBtn.innerHTML = '<span class="dashicons dashicons-no-alt"></span>';
       const whoWrap = el('div', { style: 'display:flex;flex-direction:column;gap:0;' }, [headerName, headerTime]);
       const header = el('div', { class: 'koopo-stories__header' }, [headerAvatarLink, whoWrap, statsWrap, muteBtn, reportBtn, actionsBtn, closeBtn]);
 
@@ -126,7 +125,9 @@
       // Mute button
       muteBtn.addEventListener('click', () => {
         isMuted = !isMuted;
-        muteBtn.textContent = isMuted ? '🔇' : '🔊';
+        muteBtn.innerHTML = isMuted
+          ? '<span class="dashicons dashicons-controls-volumeoff"></span>'
+          : '<span class="dashicons dashicons-controls-volumeon"></span>';
         const currentVideo = stage.querySelector('video.koopo-stories__media');
         if (currentVideo) {
           currentVideo.muted = isMuted;
@@ -338,7 +339,7 @@
       const reactions = itemAnalytics.reaction_count ?? fallbackAnalytics.reaction_count ?? 0;
 
       if (views > 0) {
-        viewCount.textContent = `👁️ ${views}`;
+        viewCount.innerHTML = `<span class="dashicons dashicons-visibility"></span> ${views}`;
         viewCount.style.display = 'block';
       } else {
         viewCount.style.display = 'none';
@@ -615,6 +616,38 @@
       }, duration);
     }
 
+    function hexToRgba(hex, alpha) {
+      if (!hex || typeof hex !== 'string' || !hex.startsWith('#')) return '';
+      const h = hex.replace('#', '');
+      const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+      if (full.length !== 6) return '';
+      const n = parseInt(full, 16);
+      const r = (n >> 16) & 255;
+      const g = (n >> 8) & 255;
+      const b = n & 255;
+      const a = Math.max(0, Math.min(1, Number(alpha)));
+      return `rgba(${r}, ${g}, ${b}, ${a})`;
+    }
+
+    function applyStickerPresentation(content, sticker) {
+      const style = (sticker && sticker.data && sticker.data.style) ? sticker.data.style : {};
+      const scaleX = Math.max(0.5, Math.min(2.5, parseFloat(style.scale_x != null ? style.scale_x : (parseFloat(style.scale) || 1))));
+      const scaleY = Math.max(0.5, Math.min(2.5, parseFloat(style.scale_y != null ? style.scale_y : (parseFloat(style.scale) || 1))));
+      content.style.transform = `scale(${scaleX}, ${scaleY})`;
+      content.style.transformOrigin = 'center';
+      if (style.text_color) content.style.color = style.text_color;
+      if (style.bg_color) {
+        const opacity = (style.bg_opacity != null) ? Number(style.bg_opacity) : 1;
+        content.style.backgroundColor = hexToRgba(style.bg_color, opacity);
+      }
+      if (style.font_size) content.style.fontSize = `${parseInt(style.font_size, 10)}px`;
+      if (style.font_family && style.font_family !== 'inherit') content.style.fontFamily = style.font_family;
+      if (style.font_weight) content.style.fontWeight = style.font_weight;
+      if (style.font_style) content.style.fontStyle = style.font_style;
+      if (style.text_decoration) content.style.textDecoration = style.text_decoration;
+      if (style.text_align) content.style.textAlign = style.text_align;
+    }
+
     // Create sticker element based on type
     function createStickerElement(sticker) {
       const wrapper = el('div', {
@@ -644,7 +677,7 @@
             style: 'background:rgba(255,255,255,0.95);color:#000;padding:12px 16px;border-radius:12px;font-size:13px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.2);max-width:200px;'
           });
           const linkIcon = el('div', { style: 'font-size:18px;margin-bottom:4px;' });
-          linkIcon.textContent = '🔗';
+          linkIcon.innerHTML = '<span class="dashicons dashicons-admin-links"></span>';
           const linkTitle = el('div', { style: 'font-weight:600;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' });
           linkTitle.textContent = sticker.data.title;
           const linkUrl = el('div', { style: 'font-size:11px;opacity:0.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' });
@@ -661,7 +694,7 @@
             style: 'background:rgba(0,0,0,0.7);color:#fff;padding:10px 14px;border-radius:16px;font-size:13px;cursor:pointer;'
           });
           const locIcon = el('span', { style: 'margin-right:6px;font-size:16px;' });
-          locIcon.textContent = '📍';
+          locIcon.innerHTML = '<span class="dashicons dashicons-location"></span>';
           const locName = el('span', { style: 'font-weight:500;' });
           locName.textContent = sticker.data.name;
           content.appendChild(locIcon);
@@ -683,12 +716,46 @@
           });
           content.textContent = sticker.data.text || '';
           break;
-
+        case 'media':
+          content = el('div', {
+            class: 'koopo-stories__sticker-media',
+            style: 'width:112px;height:112px;border-radius:14px;overflow:hidden;box-shadow:0 6px 16px rgba(0,0,0,.25);background:rgba(0,0,0,.08);'
+          });
+          if (sticker.data && sticker.data.mime === 'application/json') {
+            const lottie = el('lottie-player', {
+              src: sticker.data.url || '',
+              background: 'transparent',
+              speed: '1',
+              loop: 'true',
+              autoplay: 'true',
+              style: 'width:100%;height:100%;'
+            });
+            content.appendChild(lottie);
+            if (!(window.customElements && window.customElements.get('lottie-player'))) {
+              const existing = document.getElementById('koopo-lottie-player-script');
+              if (!existing) {
+                const script = document.createElement('script');
+                script.id = 'koopo-lottie-player-script';
+                script.src = 'https://unpkg.com/@lottiefiles/lottie-player@latest/dist/lottie-player.js';
+                script.async = true;
+                document.head.appendChild(script);
+              }
+            }
+          } else {
+            const mediaImg = el('img', {
+              src: (sticker.data && sticker.data.url) ? sticker.data.url : '',
+              alt: (sticker.data && sticker.data.title) ? sticker.data.title : '',
+              style: 'width:100%;height:100%;object-fit:cover;display:block;'
+            });
+            content.appendChild(mediaImg);
+          }
+          break;
         default:
           return null;
       }
 
       if (content) {
+        applyStickerPresentation(content, sticker);
         wrapper.appendChild(content);
         return wrapper;
       }

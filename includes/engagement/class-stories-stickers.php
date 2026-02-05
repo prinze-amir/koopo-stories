@@ -53,7 +53,7 @@ class Koopo_Stories_Stickers {
         ]));
 
         // Validate sticker type
-        $allowed_types = ['mention', 'link', 'location', 'poll', 'text'];
+        $allowed_types = ['mention', 'link', 'location', 'poll', 'text', 'media'];
         if ( ! in_array($type, $allowed_types, true) ) {
             error_log('Koopo Stickers - Invalid type: ' . $type);
             return 0;
@@ -206,6 +206,7 @@ class Koopo_Stories_Stickers {
                     'username' => $user->user_login,
                     'display_name' => $user->display_name,
                     'profile_url' => $profile_url,
+                    'style' => self::sanitize_style($data['style'] ?? []),
                 ];
 
             case 'link':
@@ -220,6 +221,7 @@ class Koopo_Stories_Stickers {
                 return [
                     'url' => $url,
                     'title' => isset($data['title']) ? sanitize_text_field($data['title']) : parse_url($url, PHP_URL_HOST),
+                    'style' => self::sanitize_style($data['style'] ?? []),
                 ];
 
             case 'location':
@@ -232,6 +234,7 @@ class Koopo_Stories_Stickers {
                     'lat' => isset($data['lat']) ? (float) $data['lat'] : null,
                     'lng' => isset($data['lng']) ? (float) $data['lng'] : null,
                     'address' => isset($data['address']) ? sanitize_text_field($data['address']) : '',
+                    'style' => self::sanitize_style($data['style'] ?? []),
                 ];
 
             case 'poll':
@@ -259,6 +262,7 @@ class Koopo_Stories_Stickers {
                 return [
                     'question' => sanitize_text_field($data['question']),
                     'options' => $options,
+                    'style' => self::sanitize_style($data['style'] ?? []),
                 ];
             case 'text':
                 if ( empty($data['text']) ) {
@@ -266,11 +270,87 @@ class Koopo_Stories_Stickers {
                 }
                 return [
                     'text' => sanitize_textarea_field($data['text']),
+                    'style' => self::sanitize_style($data['style'] ?? []),
                 ];
-
+            case 'media':
+                if (empty($data['url'])) {
+                    return [];
+                }
+                $url = esc_url_raw($data['url']);
+                if (!$url) {
+                    return [];
+                }
+                $mime = isset($data['mime']) ? sanitize_text_field($data['mime']) : '';
+                $provider = isset($data['provider']) ? sanitize_key($data['provider']) : '';
+                $title = isset($data['title']) ? sanitize_text_field($data['title']) : '';
+                return [
+                    'url' => $url,
+                    'mime' => $mime,
+                    'provider' => $provider,
+                    'title' => $title,
+                    'style' => self::sanitize_style($data['style'] ?? []),
+                ];
             default:
                 return [];
         }
+    }
+
+    private static function sanitize_style( array $style ) : array {
+        $out = [];
+        if (isset($style['scale'])) {
+            $out['scale'] = max(0.5, min(2.0, (float) $style['scale']));
+        }
+        if (isset($style['box_w'])) {
+            $out['box_w'] = max(80, min(600, (int) $style['box_w']));
+        }
+        if (isset($style['box_h'])) {
+            $out['box_h'] = max(30, min(400, (int) $style['box_h']));
+        }
+        if (isset($style['text_color'])) {
+            $c = sanitize_hex_color($style['text_color']);
+            if ($c) $out['text_color'] = $c;
+        }
+        if (isset($style['bg_color'])) {
+            $c = sanitize_hex_color($style['bg_color']);
+            if ($c) $out['bg_color'] = $c;
+        }
+        if (isset($style['bg_opacity'])) {
+            $out['bg_opacity'] = max(0.0, min(1.0, (float) $style['bg_opacity']));
+        }
+        if (isset($style['font_size'])) {
+            $out['font_size'] = max(10, min(72, (int) $style['font_size']));
+        }
+        if (isset($style['font_family'])) {
+            $allowed_fonts = ['inherit', 'Georgia', 'Trebuchet MS', 'Courier New', 'Tahoma'];
+            if (in_array($style['font_family'], $allowed_fonts, true)) {
+                $out['font_family'] = $style['font_family'];
+            }
+        }
+        if (isset($style['font_weight'])) {
+            $allowed_weights = ['normal', 'bold', '500', '600', '700'];
+            if (in_array((string) $style['font_weight'], $allowed_weights, true)) {
+                $out['font_weight'] = (string) $style['font_weight'];
+            }
+        }
+        if (isset($style['font_style'])) {
+            $allowed_styles = ['normal', 'italic'];
+            if (in_array((string) $style['font_style'], $allowed_styles, true)) {
+                $out['font_style'] = (string) $style['font_style'];
+            }
+        }
+        if (isset($style['text_decoration'])) {
+            $allowed_decorations = ['none', 'underline'];
+            if (in_array((string) $style['text_decoration'], $allowed_decorations, true)) {
+                $out['text_decoration'] = (string) $style['text_decoration'];
+            }
+        }
+        if (isset($style['text_align'])) {
+            $allowed_align = ['left', 'center', 'right'];
+            if (in_array((string) $style['text_align'], $allowed_align, true)) {
+                $out['text_align'] = (string) $style['text_align'];
+            }
+        }
+        return $out;
     }
 
     /**

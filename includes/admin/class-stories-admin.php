@@ -162,6 +162,62 @@ final class Koopo_Stories_Admin
             },
             'default' => '1',
         ]);
+        register_setting(self::SETTINGS_GROUP, 'koopo_stories_stickers_giphy_enabled', [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) {
+                return ($v === '1') ? '1' : '0';
+            },
+            'default' => '0',
+        ]);
+        register_setting(self::SETTINGS_GROUP, 'koopo_stories_stickers_giphy_api_key', [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) {
+                return sanitize_text_field($v);
+            },
+            'default' => '',
+        ]);
+        register_setting(self::SETTINGS_GROUP, 'koopo_stories_stickers_tenor_enabled', [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) {
+                return ($v === '1') ? '1' : '0';
+            },
+            'default' => '0',
+        ]);
+        register_setting(self::SETTINGS_GROUP, 'koopo_stories_stickers_tenor_api_key', [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) {
+                return sanitize_text_field($v);
+            },
+            'default' => '',
+        ]);
+        register_setting(self::SETTINGS_GROUP, 'koopo_stories_stickers_lottie_enabled', [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) {
+                return ($v === '1') ? '1' : '0';
+            },
+            'default' => '0',
+        ]);
+        register_setting(self::SETTINGS_GROUP, 'koopo_stories_stickers_lottie_library', [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) {
+                if (!is_string($v)) {
+                    return '';
+                }
+                $lines = preg_split('/\R+/', $v);
+                if (!is_array($lines)) {
+                    return '';
+                }
+                $urls = [];
+                foreach ($lines as $line) {
+                    $url = esc_url_raw(trim($line));
+                    if ($url) {
+                        $urls[] = $url;
+                    }
+                }
+                return implode("\n", array_slice($urls, 0, 60));
+            },
+            'default' => '',
+        ]);
 
         // Defaults for widgets/shortcode/activity tray
         register_setting(self::SETTINGS_GROUP, 'koopo_stories_default_scope', [
@@ -246,6 +302,9 @@ final class Koopo_Stories_Admin
         add_settings_section('koopo_stories_share', __('Share', 'koopo'), function () {
             echo '<p>' . esc_html__('Configure "Share to Story" buttons and availability.', 'koopo') . '</p>';
         }, self::SETTINGS_SLUG);
+        add_settings_section('koopo_stories_stickers', __('Sticker Providers', 'koopo'), function () {
+            echo '<p>' . esc_html__('Optional external sticker sources for the composer.', 'koopo') . '</p>';
+        }, self::SETTINGS_SLUG);
 
         add_settings_field('koopo_enable_stories', __('Enable Stories', 'koopo'), [__CLASS__, 'field_enable'], self::SETTINGS_SLUG, 'koopo_stories_core');
         add_settings_field('koopo_stories_default_privacy', __('Default Privacy', 'koopo'), [__CLASS__, 'field_privacy'], self::SETTINGS_SLUG, 'koopo_stories_core');
@@ -259,6 +318,12 @@ final class Koopo_Stories_Admin
         add_settings_field('koopo_stories_share_icon', __('Share Button Icon', 'koopo'), [__CLASS__, 'field_share_icon'], self::SETTINGS_SLUG, 'koopo_stories_share');
         add_settings_field('koopo_stories_share_super_socializer_standard', __('Super Socializer: Standard Interface', 'koopo'), [__CLASS__, 'field_share_super_socializer_standard'], self::SETTINGS_SLUG, 'koopo_stories_share');
         add_settings_field('koopo_stories_share_super_socializer_floating', __('Super Socializer: Floating Interface', 'koopo'), [__CLASS__, 'field_share_super_socializer_floating'], self::SETTINGS_SLUG, 'koopo_stories_share');
+        add_settings_field('koopo_stories_stickers_giphy_enabled', __('Enable GIPHY Stickers', 'koopo'), [__CLASS__, 'field_stickers_giphy_enabled'], self::SETTINGS_SLUG, 'koopo_stories_stickers');
+        add_settings_field('koopo_stories_stickers_giphy_api_key', __('GIPHY API Key', 'koopo'), [__CLASS__, 'field_stickers_giphy_api_key'], self::SETTINGS_SLUG, 'koopo_stories_stickers');
+        add_settings_field('koopo_stories_stickers_tenor_enabled', __('Enable Tenor Stickers', 'koopo'), [__CLASS__, 'field_stickers_tenor_enabled'], self::SETTINGS_SLUG, 'koopo_stories_stickers');
+        add_settings_field('koopo_stories_stickers_tenor_api_key', __('Tenor API Key', 'koopo'), [__CLASS__, 'field_stickers_tenor_api_key'], self::SETTINGS_SLUG, 'koopo_stories_stickers');
+        add_settings_field('koopo_stories_stickers_lottie_enabled', __('Enable Lottie Stickers', 'koopo'), [__CLASS__, 'field_stickers_lottie_enabled'], self::SETTINGS_SLUG, 'koopo_stories_stickers');
+        add_settings_field('koopo_stories_stickers_lottie_library', __('Lottie JSON URLs', 'koopo'), [__CLASS__, 'field_stickers_lottie_library'], self::SETTINGS_SLUG, 'koopo_stories_stickers');
         add_settings_field('koopo_stories_rate_limit_reactions', __('Rate Limit: Reactions (per hour)', 'koopo'), [__CLASS__, 'field_rate_limit_reactions'], self::SETTINGS_SLUG, 'koopo_stories_core');
         add_settings_field('koopo_stories_rate_limit_replies', __('Rate Limit: Replies (per hour)', 'koopo'), [__CLASS__, 'field_rate_limit_replies'], self::SETTINGS_SLUG, 'koopo_stories_core');
         add_settings_field('koopo_stories_rate_limit_reports', __('Rate Limit: Reports (per hour)', 'koopo'), [__CLASS__, 'field_rate_limit_reports'], self::SETTINGS_SLUG, 'koopo_stories_core');
@@ -651,6 +716,55 @@ final class Koopo_Stories_Admin
             checked('1', $v, false),
             esc_html__('Inject "Share to Story" into Super Socializer floating share bar (if enabled).', 'koopo')
         );
+    }
+
+    public static function field_stickers_giphy_enabled(): void
+    {
+        $v = get_option('koopo_stories_stickers_giphy_enabled', '0');
+        printf(
+            '<label><input type="checkbox" name="koopo_stories_stickers_giphy_enabled" value="1" %s /> %s</label>',
+            checked('1', $v, false),
+            esc_html__('Enable GIPHY sticker search in composer.', 'koopo')
+        );
+    }
+
+    public static function field_stickers_giphy_api_key(): void
+    {
+        $v = (string) get_option('koopo_stories_stickers_giphy_api_key', '');
+        printf('<input type="text" class="regular-text" name="koopo_stories_stickers_giphy_api_key" value="%s" />', esc_attr($v));
+    }
+
+    public static function field_stickers_tenor_enabled(): void
+    {
+        $v = get_option('koopo_stories_stickers_tenor_enabled', '0');
+        printf(
+            '<label><input type="checkbox" name="koopo_stories_stickers_tenor_enabled" value="1" %s /> %s</label>',
+            checked('1', $v, false),
+            esc_html__('Enable Tenor sticker search in composer.', 'koopo')
+        );
+    }
+
+    public static function field_stickers_tenor_api_key(): void
+    {
+        $v = (string) get_option('koopo_stories_stickers_tenor_api_key', '');
+        printf('<input type="text" class="regular-text" name="koopo_stories_stickers_tenor_api_key" value="%s" />', esc_attr($v));
+    }
+
+    public static function field_stickers_lottie_enabled(): void
+    {
+        $v = get_option('koopo_stories_stickers_lottie_enabled', '0');
+        printf(
+            '<label><input type="checkbox" name="koopo_stories_stickers_lottie_enabled" value="1" %s /> %s</label>',
+            checked('1', $v, false),
+            esc_html__('Enable Lottie JSON stickers in composer.', 'koopo')
+        );
+    }
+
+    public static function field_stickers_lottie_library(): void
+    {
+        $v = (string) get_option('koopo_stories_stickers_lottie_library', '');
+        printf('<textarea name="koopo_stories_stickers_lottie_library" rows="6" class="large-text code" placeholder="%s">%s</textarea>', esc_attr('https://assets1.lottiefiles.com/packages/lf20_xxx.json'), esc_textarea($v));
+        echo '<p class="description">' . esc_html__('One JSON URL per line. Used by the Lottie picker.', 'koopo') . '</p>';
     }
 
     public static function field_rate_limit_reactions(): void
