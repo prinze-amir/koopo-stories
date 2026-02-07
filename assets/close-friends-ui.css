@@ -150,6 +150,100 @@
     pointer-events: none;
 }
 
+.koopo-hide-all-manager {
+    max-width: 600px;
+    margin: 20px auto 0;
+    background: #fff;
+    border-radius: 12px;
+    padding: 20px;
+}
+
+.koopo-hide-all-search {
+    position: relative;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin: 12px 0 16px;
+}
+
+.koopo-hide-all-input {
+    flex: 1;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid #ddd;
+}
+
+.koopo-hide-all-add {
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid #111;
+    background: #111;
+    color: #fff;
+    cursor: pointer;
+}
+
+.koopo-hide-all-dropdown {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 40px;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    max-height: 200px;
+    overflow: auto;
+    display: none;
+    z-index: 10;
+}
+
+.koopo-hide-all-suggestion,
+.koopo-hide-all-empty {
+    padding: 8px 10px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.koopo-hide-all-suggestion:hover {
+    background: #f1f1f1;
+}
+
+.koopo-hide-all-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.koopo-hide-all-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #fff;
+    border: 1px solid #eee;
+    border-radius: 6px;
+    padding: 8px;
+}
+
+.koopo-hide-all-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.koopo-hide-all-name {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.koopo-hide-all-remove {
+    background: transparent;
+    border: none;
+    color: #d64545;
+    cursor: pointer;
+    font-size: 12px;
+}
+
 /* Responsive */
 @media (max-width: 600px) {
     .koopo-close-friends-manager {

@@ -101,13 +101,13 @@ final class Koopo_Stories_Admin
         register_setting(self::SETTINGS_GROUP, 'koopo_stories_allowed_image_mimes', [
             'type' => 'array',
             'sanitize_callback' => function ($v) {
-                $allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+                $allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif'];
                 if (!is_array($v))
-                    return ['image/jpeg', 'image/png', 'image/webp'];
+                    return ['image/jpeg', 'image/png', 'image/webp', 'image/avif'];
                 $out = array_values(array_intersect($allowed, $v));
-                return !empty($out) ? $out : ['image/jpeg', 'image/png', 'image/webp'];
+                return !empty($out) ? $out : ['image/jpeg', 'image/png', 'image/webp', 'image/avif'];
             },
-            'default' => ['image/jpeg', 'image/png', 'image/webp'],
+            'default' => ['image/jpeg', 'image/png', 'image/webp', 'image/avif'],
         ]);
 
         register_setting(self::SETTINGS_GROUP, 'koopo_stories_allowed_video_mimes', [
@@ -156,6 +156,13 @@ final class Koopo_Stories_Admin
         ]);
 
         register_setting(self::SETTINGS_GROUP, 'koopo_stories_share_super_socializer_floating', [
+            'type' => 'string',
+            'sanitize_callback' => function ($v) {
+                return ($v === '1') ? '1' : '0';
+            },
+            'default' => '1',
+        ]);
+        register_setting(self::SETTINGS_GROUP, 'koopo_stories_share_story_to_activity', [
             'type' => 'string',
             'sanitize_callback' => function ($v) {
                 return ($v === '1') ? '1' : '0';
@@ -318,6 +325,7 @@ final class Koopo_Stories_Admin
         add_settings_field('koopo_stories_share_icon', __('Share Button Icon', 'koopo'), [__CLASS__, 'field_share_icon'], self::SETTINGS_SLUG, 'koopo_stories_share');
         add_settings_field('koopo_stories_share_super_socializer_standard', __('Super Socializer: Standard Interface', 'koopo'), [__CLASS__, 'field_share_super_socializer_standard'], self::SETTINGS_SLUG, 'koopo_stories_share');
         add_settings_field('koopo_stories_share_super_socializer_floating', __('Super Socializer: Floating Interface', 'koopo'), [__CLASS__, 'field_share_super_socializer_floating'], self::SETTINGS_SLUG, 'koopo_stories_share');
+        add_settings_field('koopo_stories_share_story_to_activity', __('Allow sharing stories to activity', 'koopo'), [__CLASS__, 'field_share_story_to_activity'], self::SETTINGS_SLUG, 'koopo_stories_share');
         add_settings_field('koopo_stories_stickers_giphy_enabled', __('Enable GIPHY Stickers', 'koopo'), [__CLASS__, 'field_stickers_giphy_enabled'], self::SETTINGS_SLUG, 'koopo_stories_stickers');
         add_settings_field('koopo_stories_stickers_giphy_api_key', __('GIPHY API Key', 'koopo'), [__CLASS__, 'field_stickers_giphy_api_key'], self::SETTINGS_SLUG, 'koopo_stories_stickers');
         add_settings_field('koopo_stories_stickers_tenor_enabled', __('Enable Tenor Stickers', 'koopo'), [__CLASS__, 'field_stickers_tenor_enabled'], self::SETTINGS_SLUG, 'koopo_stories_stickers');
@@ -595,6 +603,7 @@ final class Koopo_Stories_Admin
             'image/jpeg' => 'JPG / JPEG',
             'image/png' => 'PNG',
             'image/webp' => 'WebP',
+            'image/avif' => 'AVIF',
             'image/gif' => 'GIF',
         ];
         $vid_opts = [
@@ -715,6 +724,16 @@ final class Koopo_Stories_Admin
             '<label><input type="checkbox" name="koopo_stories_share_super_socializer_floating" value="1" %s /> %s</label>',
             checked('1', $v, false),
             esc_html__('Inject "Share to Story" into Super Socializer floating share bar (if enabled).', 'koopo')
+        );
+    }
+
+    public static function field_share_story_to_activity(): void
+    {
+        $v = get_option('koopo_stories_share_story_to_activity', '1');
+        printf(
+            '<label><input type="checkbox" name="koopo_stories_share_story_to_activity" value="1" %s /> %s</label>',
+            checked('1', $v, false),
+            esc_html__('Enable "Share Story to Activity" action in the story viewer.', 'koopo')
         );
     }
 

@@ -44,8 +44,9 @@
 
     const preview = el('div', {
       class: 'koopo-stories__composer-preview',
-      style: 'position:relative;'
+      style: 'position:relative;display:flex;align-items:center;justify-content:center;'
     });
+    const previewWrap = el('div', { class: 'koopo-stories__composer-media-wrap', style: 'position:relative;' });
     let url = URL.createObjectURL(composerFile);
 
     let mediaEl;
@@ -61,10 +62,29 @@
       mediaEl.src = url;
       mediaEl.alt = '';
     }
-    preview.appendChild(mediaEl);
+    previewWrap.appendChild(mediaEl);
+    preview.appendChild(previewWrap);
+    const syncPreviewWrapSize = () => {
+      const rect = mediaEl.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      previewWrap.style.width = `${rect.width}px`;
+      previewWrap.style.height = `${rect.height}px`;
+    };
+    const scheduleSyncPreviewWrap = () => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(syncPreviewWrapSize);
+      });
+    };
+    if (mediaEl.tagName === 'IMG') {
+      mediaEl.addEventListener('load', scheduleSyncPreviewWrap);
+    } else {
+      mediaEl.addEventListener('loadedmetadata', scheduleSyncPreviewWrap);
+      mediaEl.addEventListener('loadeddata', scheduleSyncPreviewWrap);
+    }
+    window.addEventListener('resize', syncPreviewWrapSize);
     preview.addEventListener('pointerdown', (e) => {
       if (e.target === preview || e.target === mediaEl) {
-        preview.querySelectorAll('.koopo-stories__sticker.is-active').forEach((node) => node.classList.remove('is-active'));
+        previewWrap.querySelectorAll('.koopo-stories__sticker.is-active').forEach((node) => node.classList.remove('is-active'));
       }
     });
 
@@ -134,18 +154,18 @@
       };
       assignStickerCid(sticker);
       pendingStickers.push(sticker);
-      const stickerPreview = createStickerElement(sticker, pendingStickers, preview, assignStickerCid);
+      const stickerPreview = createStickerElement(sticker, pendingStickers, previewWrap, assignStickerCid);
       if (!stickerPreview) return;
       stickerPreview.style.cursor = 'move';
-      preview.appendChild(stickerPreview);
-      makeDraggable(stickerPreview, preview, sticker.position);
+      previewWrap.appendChild(stickerPreview);
+      makeDraggable(stickerPreview, previewWrap, sticker.position);
       const content = stickerPreview.__stickerContent || stickerPreview.querySelector('.koopo-stories__sticker-text');
-      if (content) openInlineTextEditor(sticker, content, preview);
+      if (content) openInlineTextEditor(sticker, content, previewWrap);
     };
 
     const mentionBtn = makeCircleTool({ text: '@' }, 'Mention', () => {
       stickerMenu.hidden = true;
-      openStickerModal('mention', pendingStickers, preview, assignStickerCid, {});
+      openStickerModal('mention', pendingStickers, previewWrap, assignStickerCid, {});
     });
     const textBtn = makeCircleTool({ text: 'Aa' }, 'Text', () => {
       stickerMenu.hidden = true;
@@ -166,6 +186,9 @@
         composerFile = edited;
         url = URL.createObjectURL(composerFile);
         mediaEl.src = url;
+        if (typeof scheduleSyncPreviewWrap === 'function') {
+          scheduleSyncPreviewWrap();
+        }
       });
       stickerToolbar.appendChild(editBtn);
     }
@@ -182,10 +205,10 @@
       menuBtnItem.onclick = () => {
         stickerMenu.hidden = true;
         if (item.type === 'giphy' || item.type === 'tenor' || item.type === 'lottie') {
-          openExternalStickerModal(item.type, pendingStickers, preview, assignStickerCid);
+          openExternalStickerModal(item.type, pendingStickers, previewWrap, assignStickerCid);
           return;
         }
-        openStickerModal(item.type, pendingStickers, preview, assignStickerCid, {});
+        openStickerModal(item.type, pendingStickers, previewWrap, assignStickerCid, {});
       };
       stickerMenu.appendChild(menuBtnItem);
     });
@@ -216,6 +239,15 @@
     privacyWrap.appendChild(privacyLabel);
     privacyWrap.appendChild(privacySelect);
 
+    const shareActivityWrap = el('label', { class: 'koopo-stories__composer-privacy-label', style: 'display:flex;align-items:center;gap:8px;margin-top:10px;' });
+    const shareActivityCheckbox = el('input', { type: 'checkbox' });
+    const shareActivityText = el('span', { html: 'Also share to activity' });
+    shareActivityWrap.appendChild(shareActivityCheckbox);
+    shareActivityWrap.appendChild(shareActivityText);
+    if (window.KoopoStories && window.KoopoStories.shareStoryToActivity) {
+      privacyWrap.appendChild(shareActivityWrap);
+    }
+
     const actions = el('div', { class: 'koopo-stories__composer-actions' });
     const cancelBtn = el('button', { class: 'koopo-stories__composer-cancel', type: 'button' });
     cancelBtn.textContent = 'Cancel';
@@ -240,11 +272,11 @@
         options.stickers.forEach(s => {
           assignStickerCid(s);
           pendingStickers.push(s);
-          const stickerPreview = createStickerElement(s, pendingStickers, preview, assignStickerCid);
+          const stickerPreview = createStickerElement(s, pendingStickers, previewWrap, assignStickerCid);
           if (stickerPreview) {
             stickerPreview.style.cursor = 'move';
-            preview.appendChild(stickerPreview);
-            makeDraggable(stickerPreview, preview, s.position);
+            previewWrap.appendChild(stickerPreview);
+            makeDraggable(stickerPreview, previewWrap, s.position);
           }
         });
       }, 100);
@@ -288,6 +320,28 @@
               console.error('Failed to add sticker:', stickerErr);
               // Continue with other stickers even if one fails
             }
+          }
+        }
+
+        if (window.KoopoStories && window.KoopoStories.shareStoryToActivity && shareActivityCheckbox.checked && response.story_id) {
+          status.textContent = 'Sharing to activity...';
+          try {
+            const form = new FormData();
+            form.append('action', 'koopo_stories_share_story_activity');
+            form.append('story_id', String(response.story_id));
+            // Send the newly created item_id to ensure correct item is used
+            if (response.item_id) {
+              form.append('item_id', String(response.item_id));
+            }
+            if (window.KoopoStories.shareNonce) form.append('nonce', window.KoopoStories.shareNonce);
+            const res = await fetch(window.KoopoStories.shareAjaxUrl || '', { method: 'POST', credentials: 'same-origin', body: form });
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok || !payload.success) {
+              throw new Error(payload?.data?.message || 'Share to activity failed');
+            }
+          } catch (e) {
+            console.error('Failed to share to activity:', e);
+            status.textContent = e.message || 'Share to activity failed';
           }
         }
 
@@ -461,10 +515,10 @@
         };
         assignStickerCid(sticker);
         pendingStickers.push(sticker);
-        const stickerPreview = createStickerElement(sticker, pendingStickers, preview, assignStickerCid);
+        const stickerPreview = createStickerElement(sticker, pendingStickers, previewWrap, assignStickerCid);
         if (stickerPreview) {
-          preview.appendChild(stickerPreview);
-          makeDraggable(stickerPreview, preview, sticker.position);
+          previewWrap.appendChild(stickerPreview);
+          makeDraggable(stickerPreview, previewWrap, sticker.position);
         }
         overlay.remove();
       };
@@ -1111,13 +1165,13 @@
       pendingStickers.push(sticker);
 
       // Show preview of sticker on the media
-      const stickerPreview = createStickerElement(sticker, pendingStickers, preview, assignStickerCid);
+      const stickerPreview = createStickerElement(sticker, pendingStickers, previewWrap, assignStickerCid);
       if (stickerPreview) {
         stickerPreview.style.cursor = 'move';
-        preview.appendChild(stickerPreview);
+        previewWrap.appendChild(stickerPreview);
 
         // Make sticker draggable within preview
-        makeDraggable(stickerPreview, preview, sticker.position);
+        makeDraggable(stickerPreview, previewWrap, sticker.position);
       }
 
       closeModal();
@@ -1219,10 +1273,18 @@
 
   function applyStickerPresentation(content, sticker) {
     const s = ensureStickerStyle(sticker);
-    const scaleX = Math.max(0.5, Math.min(2.5, parseFloat(s.scale_x != null ? s.scale_x : (parseFloat(s.scale) || 1))));
-    const scaleY = Math.max(0.5, Math.min(2.5, parseFloat(s.scale_y != null ? s.scale_y : (parseFloat(s.scale) || 1))));
-    content.style.transform = `scale(${scaleX}, ${scaleY})`;
-    content.style.transformOrigin = 'center';
+    const hasBox = s.box_w || s.box_h;
+    if (hasBox) {
+      if (s.box_w) content.style.width = `${s.box_w}px`;
+      if (s.box_h) content.style.height = `${s.box_h}px`;
+      content.style.transform = 'none';
+      content.style.transformOrigin = 'center';
+    } else {
+      const scaleX = Math.max(0.5, Math.min(2.5, parseFloat(s.scale_x != null ? s.scale_x : (parseFloat(s.scale) || 1))));
+      const scaleY = Math.max(0.5, Math.min(2.5, parseFloat(s.scale_y != null ? s.scale_y : (parseFloat(s.scale) || 1))));
+      content.style.transform = `scale(${scaleX}, ${scaleY})`;
+      content.style.transformOrigin = 'center';
+    }
     if (s.text_color) content.style.color = s.text_color;
     if (s.bg_color) {
       const opacity = (s.bg_opacity != null) ? Number(s.bg_opacity) : 1;
@@ -1385,18 +1447,18 @@
     editBtn.onclick = (e) => {
       e.stopPropagation();
       if (sticker.type === 'text') {
-        openInlineTextEditor(sticker, content, preview);
+        openInlineTextEditor(sticker, content, previewWrap);
         return;
       }
-      openStickerModal(sticker.type, pendingStickers, preview, assignStickerCid, {
+      openStickerModal(sticker.type, pendingStickers, previewWrap, assignStickerCid, {
         existingSticker: sticker,
         onSave: (nextData) => {
           sticker.data = nextData;
           wrapper.remove();
-          const updated = createStickerElement(sticker, pendingStickers, preview, assignStickerCid);
+          const updated = createStickerElement(sticker, pendingStickers, previewWrap, assignStickerCid);
           if (updated) {
-            preview.appendChild(updated);
-            makeDraggable(updated, preview, sticker.position);
+            previewWrap.appendChild(updated);
+            makeDraggable(updated, previewWrap, sticker.position);
           }
         },
       });
@@ -1440,6 +1502,8 @@
         if (mode === 's' || mode === 'se') s.box_h = nextH;
         if (s.box_w) content.style.width = `${s.box_w}px`;
         if (s.box_h) content.style.height = `${s.box_h}px`;
+        delete s.scale_x;
+        delete s.scale_y;
         applyStickerPresentation(content, sticker);
       };
 

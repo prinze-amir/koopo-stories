@@ -44,6 +44,8 @@ class Koopo_Stories_Share
         add_action('wp_enqueue_scripts', [__CLASS__, 'enqueue_super_socializer_integration']);
         add_action('wp_ajax_koopo_stories_get_activity_media', [__CLASS__, 'ajax_get_activity_media']);
         add_action('wp_ajax_koopo_stories_get_activity_media_file', [__CLASS__, 'ajax_get_activity_media_file']);
+        add_action('wp_ajax_koopo_stories_share_story_activity', [__CLASS__, 'ajax_share_story_to_activity']);
+        add_filter('bp_get_activity_content_body', [__CLASS__, 'render_activity_story_card'], 99, 2);
 
         // BuddyBoss/BuddyPress Activity Hooks
         add_action('bp_activity_entry_meta', [__CLASS__, 'activity_share_button']);
@@ -205,6 +207,9 @@ class Koopo_Stories_Share
 
     public static function register_scripts()
     {
+        if (!is_user_logged_in()) {
+            return;
+        }
         $base_ver = defined('KOOPO_STORIES_VER') ? KOOPO_STORIES_VER : '1.0.0';
         $share_js = KOOPO_STORIES_PATH . 'assets/stories-share.js';
         $ss_js = KOOPO_STORIES_PATH . 'assets/stories-super-socializer.js';
@@ -233,6 +238,9 @@ class Koopo_Stories_Share
 
     public static function enqueue_super_socializer_integration(): void
     {
+        if (!is_user_logged_in()) {
+            return;
+        }
         if (!function_exists('the_champ_social_sharing_enabled')) {
             return;
         }
@@ -448,6 +456,326 @@ class Koopo_Stories_Share
         header('X-Koopo-Stories-Proxy: 1');
         echo $body; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
         exit;
+    }
+
+    public static function ajax_share_story_to_activity(): void
+    {
+        if (!is_user_logged_in()) {
+            wp_send_json_error(['message' => __('Unauthorized', 'koopo')], 401);
+        }
+
+        check_ajax_referer('koopo_stories_share', 'nonce');
+
+        if (!function_exists('bp_activity_post_update') && !function_exists('bp_activity_add')) {
+            wp_send_json_error(['message' => __('BuddyBoss activity not available.', 'koopo')], 400);
+        }
+
+        $story_id = isset($_POST['story_id']) ? absint($_POST['story_id']) : 0;
+        if ($story_id <= 0) {
+            wp_send_json_error(['message' => __('Invalid story.', 'koopo')], 400);
+        }
+
+        if (class_exists('Koopo_Stories_Permissions') && !Koopo_Stories_Permissions::can_view_story($story_id, get_current_user_id())) {
+            wp_send_json_error(['message' => __('You cannot share this story.', 'koopo')], 403);
+        }
+
+        if (function_exists('bp_activity_user_can_post') && !bp_activity_user_can_post()) {
+            wp_send_json_error(['message' => __('Posting to activity is disabled.', 'koopo')], 403);
+        }
+
+        // Use provided item_id if valid, otherwise fall back to first item
+        $item_id = isset($_POST['item_id']) ? absint($_POST['item_id']) : 0;
+        if ($item_id > 0) {
+            // Verify this item belongs to the story
+            $item_story_id = (int) get_post_meta($item_id, 'story_id', true);
+            if ($item_story_id !== $story_id) {
+                // Item doesn't belong to this story, fall back to first item
+                $item_id = self::get_first_story_item_id($story_id);
+            }
+        } else {
+            $item_id = self::get_first_story_item_id($story_id);
+        }
+        $activity_link = self::get_activity_story_link($story_id, $item_id);
+        $author_id = (int) get_post_field('post_author', $story_id);
+        $author_name = $author_id ? (get_userdata($author_id)->display_name ?? '') : '';
+
+        // Get cover media (works for both images and videos)
+        $cover_media = $item_id ? Koopo_Stories_Utils::get_story_cover_media($item_id, 'medium') : ['url' => '', 'type' => 'image', 'thumb' => ''];
+        $media_type = $cover_media['type'];
+        $thumb = $cover_media['thumb'];
+        $media_url = $cover_media['url'];
+
+        $item_payload = $item_id ? Koopo_Stories_Utils::build_story_item_payload($item_id, false) : null;
+        $stickers = ($item_id && class_exists('Koopo_Stories_Stickers')) ? Koopo_Stories_Stickers::get_stickers($item_id) : [];
+        $stickers_json = $stickers ? wp_json_encode($stickers) : '';
+        $attachment_id = $item_id ? (int) get_post_meta($item_id, 'attachment_id', true) : 0;
+        $media_html = '';
+        if (is_array($item_payload) && !empty($item_payload['src'])) {
+            $media_src = esc_url($item_payload['src']);
+            if ($media_type === 'video') {
+                $poster = $thumb ? ' poster="' . esc_url($thumb) . '"' : '';
+                $media_tag = '<video controls playsinline muted preload="metadata"' . $poster . '><source src="' . $media_src . '" /></video>';
+            } else {
+                $media_tag = '<img src="' . $media_src . '" alt="" />';
+            }
+            $media_html = '<div class="koopo-story-share-media" data-stickers="' . esc_attr($stickers_json) . '" data-media-type="' . esc_attr($media_type) . '">'
+                . '<a href="' . esc_url($activity_link) . '" class="koopo-story-open" data-koopo-story="' . esc_attr((string) $story_id) . '" data-koopo-item="' . esc_attr((string) $item_id) . '">'
+                . $media_tag
+                . '</a></div>';
+        } elseif ($media_url) {
+            // Fallback: use full media URL (covers videos without thumbnails)
+            if ($media_type === 'video') {
+                $media_tag = '<video controls playsinline muted preload="metadata"><source src="' . esc_url($media_url) . '" /></video>';
+            } else {
+                $media_tag = '<img src="' . esc_url($media_url) . '" alt="" />';
+            }
+            $media_html = '<div class="koopo-story-share-media" data-stickers="' . esc_attr($stickers_json) . '" data-media-type="' . esc_attr($media_type) . '">'
+                . '<a href="' . esc_url($activity_link) . '" class="koopo-story-open" data-koopo-story="' . esc_attr((string) $story_id) . '" data-koopo-item="' . esc_attr((string) $item_id) . '">'
+                . $media_tag
+                . '</a></div>';
+        }
+        $content = self::ensure_shared_content(esc_html__('Shared a story', 'koopo'));
+        $privacy = get_post_meta($story_id, 'privacy', true);
+        if (function_exists('bp_activity_get_visibility_levels')) {
+            $levels = bp_activity_get_visibility_levels();
+            if (is_array($levels) && isset($levels[$privacy])) {
+                // ok
+            } else {
+                $privacy = 'public';
+            }
+        } else {
+            $privacy = 'public';
+        }
+
+        $args = [
+            'content'   => $content,
+            'component' => 'activity',
+            'type'      => 'activity_update',
+            'user_id'   => get_current_user_id(),
+            'privacy'   => $privacy,
+            'status'    => function_exists('bb_get_activity_published_status') ? bb_get_activity_published_status() : 'published',
+            'error_type'=> 'wp_error',
+        ];
+
+        $activity_id = function_exists('bp_activity_post_update')
+            ? bp_activity_post_update($args)
+            : bp_activity_add($args);
+
+        if (is_wp_error($activity_id) || !$activity_id) {
+            $msg = is_wp_error($activity_id) ? $activity_id->get_error_message() : __('Failed to share story to activity.', 'koopo');
+            wp_send_json_error(['message' => $msg], 400);
+        }
+
+        if (function_exists('bp_activity_update_meta')) {
+            bp_activity_update_meta((int) $activity_id, 'koopo_story_id', $story_id);
+            bp_activity_update_meta((int) $activity_id, 'koopo_story_link', $activity_link);
+            bp_activity_update_meta((int) $activity_id, 'koopo_story_item_id', $item_id);
+            bp_activity_update_meta((int) $activity_id, 'koopo_story_media_type', $media_type);
+            if ($author_name) {
+                bp_activity_update_meta((int) $activity_id, 'koopo_story_author', $author_name);
+            }
+            if (!empty($media_html)) {
+                bp_activity_update_meta((int) $activity_id, 'koopo_story_has_media', 1);
+            }
+
+            // Determine snapshot: for images use thumbnail, for videos use full URL
+            $snapshot = '';
+            if ($media_type === 'video') {
+                // For videos, use the full video URL (browser will show first frame)
+                $snapshot = $media_url;
+            } else {
+                // For images, prefer thumbnail, fallback to full URL
+                if ($thumb) {
+                    $snapshot = $thumb;
+                } elseif ($attachment_id) {
+                    $img = wp_get_attachment_image_url($attachment_id, 'medium');
+                    if (is_string($img) && $img !== '') {
+                        $snapshot = $img;
+                    }
+                }
+                if (!$snapshot && $media_url) {
+                    $snapshot = $media_url;
+                }
+            }
+
+            if ($snapshot) {
+                bp_activity_update_meta((int) $activity_id, 'koopo_story_snapshot', $snapshot);
+            }
+            if ($thumb) {
+                bp_activity_update_meta((int) $activity_id, 'koopo_story_thumb', $thumb);
+            }
+        }
+
+        wp_send_json_success([
+            'activity_id' => (int) $activity_id,
+            'link' => $activity_link,
+        ]);
+    }
+
+    public static function render_activity_story_card($content, $activity) {
+        if (!is_object($activity) || empty($activity->id)) {
+            return $content;
+        }
+        if (strpos((string) $content, 'koopo-story-share-card') !== false) {
+            return $content;
+        }
+        $story_id = function_exists('bp_activity_get_meta') ? (int) bp_activity_get_meta($activity->id, 'koopo_story_id', true) : 0;
+        if ($story_id <= 0) {
+            return $content;
+        }
+        $link = function_exists('bp_activity_get_meta') ? (string) bp_activity_get_meta($activity->id, 'koopo_story_link', true) : '';
+        $item_id = function_exists('bp_activity_get_meta') ? (int) bp_activity_get_meta($activity->id, 'koopo_story_item_id', true) : 0;
+        $author_name = function_exists('bp_activity_get_meta') ? (string) bp_activity_get_meta($activity->id, 'koopo_story_author', true) : '';
+        $snapshot = function_exists('bp_activity_get_meta') ? (string) bp_activity_get_meta($activity->id, 'koopo_story_snapshot', true) : '';
+        $thumb = function_exists('bp_activity_get_meta') ? (string) bp_activity_get_meta($activity->id, 'koopo_story_thumb', true) : '';
+        $media_type = function_exists('bp_activity_get_meta') ? (string) bp_activity_get_meta($activity->id, 'koopo_story_media_type', true) : '';
+
+        if (!$item_id && $story_id) {
+            $item_id = self::get_first_story_item_id($story_id);
+        }
+
+        // If media type not stored, try to determine from item
+        if (!$media_type && $item_id) {
+            $cover_media = Koopo_Stories_Utils::get_story_cover_media($item_id, 'medium');
+            $media_type = $cover_media['type'];
+            if (!$snapshot && $cover_media['url']) {
+                $snapshot = $cover_media['url'];
+            }
+            if (!$thumb && $cover_media['thumb']) {
+                $thumb = $cover_media['thumb'];
+            }
+        }
+
+        // Fallback snapshot logic for legacy posts
+        if (!$snapshot) {
+            $attachment_id = $item_id ? (int) get_post_meta($item_id, 'attachment_id', true) : 0;
+            if ($attachment_id) {
+                // For images, try to get thumbnail
+                if ($media_type !== 'video') {
+                    $img = wp_get_attachment_image_url($attachment_id, 'medium');
+                    if (is_string($img) && $img !== '') {
+                        $snapshot = $img;
+                    }
+                }
+                // For videos or if thumbnail failed, use full URL
+                if (!$snapshot) {
+                    $full_url = wp_get_attachment_url($attachment_id);
+                    if (is_string($full_url) && $full_url !== '') {
+                        $snapshot = $full_url;
+                    }
+                }
+            }
+            if (!$snapshot) {
+                $item_payload = ($item_id && class_exists('Koopo_Stories_Utils')) ? Koopo_Stories_Utils::build_story_item_payload($item_id, false) : null;
+                if (is_array($item_payload) && !empty($item_payload['src'])) {
+                    $snapshot = $item_payload['src'];
+                    if (!$media_type) {
+                        $media_type = $item_payload['type'] ?? 'image';
+                    }
+                }
+            }
+        }
+
+        if (!$thumb && $item_id && $media_type !== 'video') {
+            $thumb = Koopo_Stories_Utils::get_story_cover_thumb($item_id, 'medium');
+        }
+
+        if (!$link) {
+            $link = self::get_activity_story_link($story_id, $item_id);
+        }
+
+        // Build media HTML based on type
+        $media = '';
+        $media_src = $snapshot ?: $thumb;
+        if ($media_src) {
+            if ($media_type === 'video') {
+                // Render video element - browser will show first frame as preview
+                $poster_attr = $thumb ? ' poster="' . esc_url($thumb) . '"' : '';
+                $media_tag = '<video controls playsinline muted preload="metadata"' . $poster_attr . '><source src="' . esc_url($media_src) . '" /></video>';
+            } else {
+                // Render image element
+                $media_tag = '<img src="' . esc_url($media_src) . '" alt="" />';
+            }
+            $media = '<div class="koopo-story-share-media" data-media-type="' . esc_attr($media_type ?: 'image') . '">'
+                . '<a href="' . esc_url($link) . '" class="koopo-story-open" data-koopo-story="' . esc_attr((string) $story_id) . '" data-koopo-item="' . esc_attr((string) $item_id) . '">'
+                . $media_tag
+                . '</a></div>';
+        }
+
+        $title = esc_html__('Shared a story', 'koopo') . ($author_name ? ' ' . esc_html__('by', 'koopo') . ' ' . esc_html($author_name) : '');
+        $card = '<div class="koopo-story-share-card">'
+            . '<div class="koopo-story-share-meta">'
+            . '<div class="koopo-story-share-title">' . $title . '</div>'
+            . '<div class="koopo-story-share-link"><a href="' . esc_url($link) . '" class="koopo-story-open" data-koopo-story="' . esc_attr((string) $story_id) . '" data-koopo-item="' . esc_attr((string) $item_id) . '">' . esc_html__('View story', 'koopo') . '</a></div>'
+            . '</div>'
+            . $media
+            . '</div>';
+
+        return $content . $card;
+    }
+
+    private static function ensure_shared_content(string $content): string
+    {
+        $trim = trim(wp_strip_all_tags($content));
+        return $trim === '' ? esc_html__('Shared a story', 'koopo') : $content;
+    }
+
+    private static function get_story_cover_thumb(int $story_id): string
+    {
+        if ($story_id <= 0) return '';
+        $item_id = self::get_first_story_item_id($story_id);
+        if ($item_id <= 0) return '';
+        // Use the new cover media function which handles videos
+        $cover = Koopo_Stories_Utils::get_story_cover_media($item_id, 'medium');
+        // Return thumb if available, otherwise return full URL for videos
+        return $cover['thumb'] ?: $cover['url'];
+    }
+
+    private static function get_first_story_item_id(int $story_id): int
+    {
+        if ($story_id <= 0) {
+            return 0;
+        }
+        $items = get_posts([
+            'post_type' => Koopo_Stories_Module::CPT_ITEM,
+            'post_status' => 'any',
+            'fields' => 'ids',
+            'posts_per_page' => 1,
+            'orderby' => 'ID',
+            'order' => 'ASC',
+            'meta_query' => [
+                [
+                    'key' => 'story_id',
+                    'value' => (string) $story_id,
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+        return !empty($items[0]) ? (int) $items[0] : 0;
+    }
+
+    private static function get_activity_story_link(int $story_id, int $item_id = 0): string
+    {
+        $base = '';
+        if (function_exists('bp_get_activity_directory_permalink')) {
+            $base = bp_get_activity_directory_permalink();
+        } elseif (function_exists('bp_get_activity_root_slug')) {
+            $slug = trim((string) bp_get_activity_root_slug(), '/');
+            if ($slug !== '') {
+                $base = home_url('/' . $slug . '/');
+            }
+        }
+        if (!$base) {
+            $base = home_url('/activity/');
+        }
+        $base = trailingslashit($base);
+        $args = [
+            'koopo_story' => (string) $story_id,
+        ];
+        if ($item_id > 0) {
+            $args['koopo_story_item'] = (string) $item_id;
+        }
+        return add_query_arg($args, $base);
     }
 
     private static function resolve_activity_media(int $activity_id): array

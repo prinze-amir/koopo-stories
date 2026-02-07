@@ -13,6 +13,7 @@ class Koopo_Stories_Close_Friends_UI {
     public static function init() : void {
         // Shortcode for close friends manager
         add_shortcode('koopo_close_friends_manager', [ __CLASS__, 'shortcode_manager' ]);
+        add_shortcode('koopo_hide_all_manager', [ __CLASS__, 'shortcode_hide_all' ]);
 
         // Enqueue assets when shortcode is present
         add_action('wp_enqueue_scripts', [ __CLASS__, 'register_assets' ]);
@@ -53,6 +54,8 @@ class Koopo_Stories_Close_Friends_UI {
 
         wp_localize_script('koopo-close-friends-ui', 'KoopoCloseFriends', [
             'restUrl' => esc_url_raw( rest_url( Koopo_Stories_Module::REST_NS . '/stories/close-friends' ) ),
+            'hideAllUrl' => esc_url_raw( rest_url( Koopo_Stories_Module::REST_NS . '/stories/hide-all' ) ),
+            'searchUrl' => esc_url_raw( rest_url( Koopo_Stories_Module::REST_NS . '/stories/search-users' ) ),
             'nonce'   => wp_create_nonce('wp_rest'),
             'userId'  => get_current_user_id(),
         ]);
@@ -144,6 +147,40 @@ class Koopo_Stories_Close_Friends_UI {
             <?php endif; ?>
         </div>
         <?php
+        return ob_get_clean();
+    }
+
+    /**
+     * Shortcode: [koopo_hide_all_manager]
+     * Renders hide-all-stories management interface
+     */
+    public static function shortcode_hide_all( $atts = [] ) : string {
+        if ( ! is_user_logged_in() ) {
+            return '<p>' . esc_html__('Please log in to manage your hidden stories list.', 'koopo') . '</p>';
+        }
+
+        self::enqueue_assets();
+
+        ob_start();
+        ?>
+        <div class="koopo-hide-all-manager">
+            <div class="koopo-close-friends-header">
+                <h3><?php esc_html_e('Hide All Stories From', 'koopo'); ?></h3>
+                <p class="koopo-close-friends-description">
+                    <?php esc_html_e('Hide all of your stories from selected people without blocking them.', 'koopo'); ?>
+                </p>
+            </div>
+
+            <div class="koopo-hide-all-search">
+                <input type="text" class="koopo-hide-all-input" placeholder="<?php esc_attr_e('Search by username', 'koopo'); ?>">
+                <div class="koopo-hide-all-dropdown"></div>
+                <button type="button" class="koopo-hide-all-add"><?php esc_html_e('Add', 'koopo'); ?></button>
+            </div>
+
+            <div class="koopo-hide-all-list"></div>
+        </div>
+        <?php
+
         return ob_get_clean();
     }
 }

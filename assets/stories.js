@@ -31,6 +31,12 @@
     return res.json();
   }
 
+  async function apiGetFull(url) {
+    const res = await fetch(url, { credentials: 'same-origin', headers: headers() });
+    if (!res.ok) throw new Error('Request failed');
+    return res.json();
+  }
+
   async function apiPost(url, body) {
     const isFormData = body instanceof FormData;
     const fetchHeaders = isFormData ? headers() : { ...headers(), 'Content-Type': 'application/json' };
@@ -222,6 +228,25 @@
     return promise;
   }
 
+  function fetchStoryFull(storyId) {
+    const key = `full_${String(storyId || '')}`;
+    if (!storyId) return Promise.reject(new Error('Missing story id'));
+    const cached = storyCache.get(key);
+    if (cached) return cached instanceof Promise ? cached : Promise.resolve(cached);
+    const url = `${API_BASE}/${storyId}?compact=0&include_stickers=1`;
+    const promise = apiGetFull(url)
+      .then((data) => {
+        storyCache.set(key, data);
+        return data;
+      })
+      .catch((err) => {
+        storyCache.delete(key);
+        throw err;
+      });
+    storyCache.set(key, promise);
+    return promise;
+  }
+
   function prefetchStoryData(storyData) {
     if (!storyData) return;
     if (Array.isArray(storyData.story_ids) && storyData.story_ids.length > 1) {
@@ -395,9 +420,27 @@
     try {
       const viewer = await ensureViewer();
       if (viewer.openLoading) viewer.openLoading();
-      const story = await fetchStoryCached(storyId);
+      const story = await fetchStoryFull(storyId);
       if (!story.items || story.items.length === 0) throw new Error('Story content unavailable.');
-      viewer.open(story, [], 0);
+      viewer.open(story, [], 0, false, story.story_id || storyId);
+    } catch (err) {
+      console.error('Failed to open story from URL:', err);
+      showToast('Story content unavailable.');
+    }
+  }
+
+  async function openStoryFromQuery() {
+    if (openedFromUrl) return;
+    const params = new URLSearchParams(window.location.search || '');
+    const storyId = params.get('koopo_story');
+    if (!storyId) return;
+    openedFromUrl = true;
+    try {
+      const viewer = await ensureViewer();
+      if (viewer.openLoading) viewer.openLoading();
+      const story = await fetchStoryFull(storyId);
+      if (!story.items || story.items.length === 0) throw new Error('Story content unavailable.');
+      viewer.open(story, [], 0, false, story.story_id || storyId);
     } catch (err) {
       console.error('Failed to open story from URL:', err);
       showToast('Story content unavailable.');
@@ -413,6 +456,7 @@
     if (!append) {
       loadToken = setLoading(container, true);
       container._storiesList = [];
+      delete container.dataset.archiveGroup;
     }
     const content = getTrayContent(container);
 
@@ -435,7 +479,16 @@
       }
 
       container._storiesList = (container._storiesList || []).concat(stories);
-      stories.forEach(s => content.appendChild(archiveCard(s, container)));
+      stories.forEach(s => {
+        const group = archiveGroupForDate(s.created_at);
+        if (group && container.dataset.archiveGroup !== group.key) {
+          container.dataset.archiveGroup = group.key;
+          const header = el('div', { class: 'koopo-stories__archive-group' });
+          header.textContent = group.label;
+          content.appendChild(header);
+        }
+        content.appendChild(archiveCard(s, container));
+      });
 
       container.dataset.archiveHasMore = hasMore ? '1' : '0';
       container.dataset.archivePage = String(page);
@@ -452,13 +505,41 @@
     }
   }
 
+  function archiveGroupForDate(dateStr) {
+    if (!dateStr) return null;
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) return null;
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const label = d.toLocaleString(undefined, { month: 'long', year: 'numeric' });
+    return { key, label };
+  }
+
   function archiveCard(s, container) {
-    const card = el('div', { class: 'koopo-stories__archive-card', 'data-story-id': String(s.story_id || 0) });
+    const card = el('div', {
+      class: 'koopo-stories__archive-card',
+      'data-story-id': String(s.story_id || 0),
+      'data-item-id': String(s.item_id || 0),
+    });
     const cover = el('div', { class: 'koopo-stories__archive-cover' });
-    const img = el('img', { src: s.cover_thumb || s.author?.avatar || '' });
-    img.loading = 'lazy';
-    img.decoding = 'async';
-    cover.appendChild(img);
+    const itemType = s.item_type || 'image';
+    const thumbSrc = s.cover_thumb || '';
+    const mediaSrc = s.item_src || s.cover_thumb || '';
+    if (itemType === 'video') {
+      const video = el('video', {
+        src: mediaSrc,
+        poster: thumbSrc || '',
+        muted: true,
+        playsinline: true,
+        preload: 'metadata',
+      });
+      cover.appendChild(video);
+    } else {
+      const isGif = typeof mediaSrc === 'string' && mediaSrc.toLowerCase().includes('.gif');
+      const img = el('img', { src: (isGif ? mediaSrc : (thumbSrc || mediaSrc)) || s.author?.avatar || '' });
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      cover.appendChild(img);
+    }
 
     const meta = el('div', { class: 'koopo-stories__archive-meta' });
     const title = el('div', { class: 'koopo-stories__archive-title' });
@@ -480,6 +561,7 @@
 
     card.addEventListener('click', async () => {
       const storyId = s.story_id;
+      const itemId = s.item_id;
       if (!storyId) return;
 
       const loadingOverlay = el('div', { class: 'koopo-stories__click-loader with-overlay' });
@@ -490,13 +572,16 @@
       try {
         const story = await apiGet(`${API_BASE}/${storyId}`);
         const storiesList = container?._storiesList || [];
-        const clickedIndex = storiesList.findIndex(st => String(st.story_id) === String(storyId));
+        const clickedIndex = storiesList.findIndex(st => {
+          if (itemId && st.item_id) return String(st.item_id) === String(itemId);
+          return String(st.story_id) === String(storyId);
+        });
         const viewer = await ensureViewer();
         if (!story.items || story.items.length === 0) {
           showToast('Story content unavailable.');
           return;
         }
-        viewer.open(story, storiesList, clickedIndex >= 0 ? clickedIndex : 0);
+        viewer.open(story, storiesList, clickedIndex >= 0 ? clickedIndex : 0, false, itemId || storyId);
       } finally {
         loadingOverlay.remove();
       }
@@ -619,12 +704,13 @@
 
     b.addEventListener('click', async () => {
       if (!s.story_id) return;
+      const list = [s].concat((container && Array.isArray(container._storiesList)) ? container._storiesList : []);
       const loadingOverlay = el('div', { class: 'koopo-stories__click-loader with-overlay' });
       const spinner = el('div', { class: 'koopo-stories__spinner' });
       loadingOverlay.appendChild(spinner);
       document.body.appendChild(loadingOverlay);
       try {
-        await openStoryFromTray(s.story_id, container, container?._myStoriesList || []);
+        await openStoryFromTray(s.story_id, container, list);
         b.setAttribute('data-seen', '1');
         const badge = b.querySelector('.koopo-stories__badge');
         if (badge) badge.remove();
@@ -644,6 +730,39 @@
     nodes.forEach(n => {
       openStoryFromUrl(n);
       refreshTray(n);
+    });
+    if (nodes.length === 0) {
+      openStoryFromQuery();
+    }
+    // Intercept story links in activity cards to open viewer without redirect.
+    document.addEventListener('click', async (e) => {
+      const link = e.target.closest('a.koopo-story-open, a[href*="koopo_story="]');
+      if (!link) return;
+      const params = new URLSearchParams((link.href && link.href.split('?')[1]) || '');
+      const storyId = link.dataset.koopoStory || params.get('koopo_story');
+      const itemId = link.dataset.koopoItem || params.get('koopo_story_item');
+      if (!storyId) return;
+      e.preventDefault();
+      try {
+        const viewer = await ensureViewer();
+        if (viewer.openLoading) viewer.openLoading();
+        const story = await fetchStoryFull(storyId);
+        if (!story.items || story.items.length === 0) throw new Error('Story content unavailable.');
+        const stub = {
+          story_id: story.story_id || parseInt(storyId, 10),
+          story_ids: story.story_ids || [story.story_id || parseInt(storyId, 10)],
+          author: story.author,
+          cover_thumb: story.items?.[0]?.thumb || story.items?.[0]?.src || '',
+          has_unseen: false,
+          items_count: story.items?.length || 0,
+          unseen_count: 0,
+          privacy: story.privacy || 'friends',
+        };
+        viewer.open(story, [stub], 0, false, itemId || story.story_id || storyId);
+      } catch (err) {
+        console.error('Failed to open story from link:', err);
+        showToast('Story content unavailable.');
+      }
     });
     initArchiveInfiniteScroll();
   }

@@ -116,7 +116,7 @@ final class Koopo_Stories_Utils {
             ], 400);
         }
 
-        $allowed_images = (array) get_option('koopo_stories_allowed_image_mimes', ['image/jpeg','image/png','image/webp']);
+        $allowed_images = (array) get_option('koopo_stories_allowed_image_mimes', ['image/jpeg','image/png','image/webp','image/avif']);
         $allowed_videos = (array) get_option('koopo_stories_allowed_video_mimes', ['video/mp4','video/webm']);
         $allowed_mimes = array_values(array_unique(array_merge($allowed_images, $allowed_videos)));
 
@@ -181,7 +181,22 @@ final class Koopo_Stories_Utils {
             return self::$avatar_cache[$key];
         }
 
-        $url = get_avatar_url($user_id, [ 'size' => $size ]);
+        $url = '';
+        if ( function_exists('bp_core_fetch_avatar') ) {
+            $bb_url = bp_core_fetch_avatar([
+                'item_id' => $user_id,
+                'type' => 'full',
+                'width' => $size,
+                'height' => $size,
+                'html' => false,
+            ]);
+            if ( is_string($bb_url) && $bb_url !== '' ) {
+                $url = $bb_url;
+            }
+        }
+        if ( $url === '' ) {
+            $url = get_avatar_url($user_id, [ 'size' => $size ]);
+        }
         self::$avatar_cache[$key] = is_string($url) ? $url : '';
         return self::$avatar_cache[$key];
     }
@@ -286,6 +301,48 @@ final class Koopo_Stories_Utils {
 
         $thumb = wp_get_attachment_image_url($attachment_id, $size);
         return is_string($thumb) ? $thumb : '';
+    }
+
+    /**
+     * Get cover media for a story item (works for both images and videos).
+     * Returns an array with 'url', 'type', and 'thumb' (if available).
+     */
+    public static function get_story_cover_media( int $item_id, string $size = 'medium' ) : array {
+        $result = [
+            'url' => '',
+            'type' => 'image',
+            'thumb' => '',
+        ];
+
+        if ( $item_id <= 0 ) {
+            return $result;
+        }
+
+        $attachment_id = (int) get_post_meta($item_id, 'attachment_id', true);
+        if ( ! $attachment_id ) {
+            return $result;
+        }
+
+        // Determine media type
+        $media_type = get_post_meta($item_id, 'media_type', true);
+        if ( empty($media_type) ) {
+            $mime = get_post_mime_type($attachment_id);
+            $media_type = (is_string($mime) && strpos($mime, 'video/') === 0) ? 'video' : 'image';
+        }
+        $result['type'] = $media_type;
+
+        // Get full URL
+        $full_url = wp_get_attachment_url($attachment_id);
+        $result['url'] = is_string($full_url) ? $full_url : '';
+
+        // Try to get thumbnail (works for images, returns empty for videos)
+        $thumb = wp_get_attachment_image_url($attachment_id, $size);
+        if ( is_string($thumb) && $thumb !== '' ) {
+            $result['thumb'] = $thumb;
+        }
+
+        // For videos/gifs without a thumb, the full URL will be used for display
+        return $result;
     }
 
     public static function get_privacy_rank( string $privacy ) : int {

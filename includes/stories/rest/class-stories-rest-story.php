@@ -6,6 +6,7 @@ class Koopo_Stories_REST_Story {
     public static function get_story( WP_REST_Request $req ) {
         $user_id = get_current_user_id();
         $compact = $req->get_param('compact') === '1' || $req->get_param('mobile') === '1';
+        $include_stickers = $req->get_param('include_stickers') === '1';
 
         $story_id = (int) $req['id'];
 
@@ -42,7 +43,7 @@ class Koopo_Stories_REST_Story {
             $item_payload['story_id'] = $story_id;
             $item_payload['created_at'] = mysql_to_rfc3339( get_gmt_from_date($item->post_date) );
 
-            if ( ! $compact ) {
+            if ( ! $compact || $include_stickers ) {
                 $item_payload['stickers'] = Koopo_Stories_Stickers::get_stickers($item_id);
             }
 
@@ -351,6 +352,17 @@ class Koopo_Stories_REST_Story {
         return array_values(array_unique(array_map('intval', $hidden)));
     }
 
+    private static function get_hidden_all_user_ids( int $user_id ) : array {
+        if ( $user_id <= 0 ) return [];
+        $hidden = get_user_meta($user_id, 'koopo_stories_hide_all_user_ids', true);
+        if ( empty($hidden) ) return [];
+        if ( is_string($hidden) ) {
+            $hidden = array_filter(array_map('intval', explode(',', $hidden)));
+        }
+        if ( ! is_array($hidden) ) return [];
+        return array_values(array_unique(array_map('intval', $hidden)));
+    }
+
     private static function can_manage_story( int $story_id, int $user_id ) : bool {
         $author_id = (int) get_post_field('post_author', $story_id);
         return $author_id === $user_id || user_can($user_id, 'manage_options');
@@ -369,6 +381,28 @@ class Koopo_Stories_REST_Story {
         }
 
         $hidden_ids = self::get_hidden_user_ids($story_id);
+        $users = [];
+        foreach ( $hidden_ids as $hid ) {
+            $u = Koopo_Stories_Utils::get_user_cached($hid);
+            if ( ! $u ) continue;
+            $users[] = [
+                'id' => $hid,
+                'name' => $u->display_name,
+                'username' => $u->user_login,
+                'avatar' => get_avatar_url($hid, [ 'size' => 64 ]),
+            ];
+        }
+
+        return new WP_REST_Response([ 'users' => $users ], 200);
+    }
+
+    public static function get_hidden_all_users( WP_REST_Request $req ) {
+        $user_id = get_current_user_id();
+        if ( $user_id <= 0 ) {
+            return new WP_REST_Response([ 'error' => 'unauthorized' ], 401);
+        }
+
+        $hidden_ids = self::get_hidden_all_user_ids($user_id);
         $users = [];
         foreach ( $hidden_ids as $hid ) {
             $u = Koopo_Stories_Utils::get_user_cached($hid);
@@ -444,6 +478,27 @@ class Koopo_Stories_REST_Story {
         return new WP_REST_Response([ 'ok' => true, 'user_id' => $hide_user_id ], 200);
     }
 
+    public static function add_hidden_all_user( WP_REST_Request $req ) {
+        $user_id = get_current_user_id();
+        $hide_user_id = (int) $req['user_id'];
+        if ( $user_id <= 0 ) {
+            return new WP_REST_Response([ 'error' => 'unauthorized' ], 401);
+        }
+        if ( $hide_user_id <= 0 || $hide_user_id === $user_id ) {
+            return new WP_REST_Response([ 'error' => 'invalid_user' ], 400);
+        }
+
+        $hidden_ids = self::get_hidden_all_user_ids($user_id);
+        if ( ! in_array($hide_user_id, $hidden_ids, true) ) {
+            $hidden_ids[] = $hide_user_id;
+            update_user_meta($user_id, 'koopo_stories_hide_all_user_ids', array_values(array_unique($hidden_ids)));
+        }
+
+        Koopo_Stories_REST::bump_user_feed_salt($user_id);
+        Koopo_Stories_REST::bump_global_feed_salt();
+        return new WP_REST_Response([ 'ok' => true, 'user_id' => $hide_user_id ], 200);
+    }
+
     public static function remove_story_hidden_user( WP_REST_Request $req ) {
         $user_id = get_current_user_id();
         $story_id = (int) $req['story_id'];
@@ -466,6 +521,27 @@ class Koopo_Stories_REST_Story {
         }));
         update_post_meta($story_id, 'hide_from_user_ids', $hidden_ids);
 
+        Koopo_Stories_REST::bump_global_feed_salt();
+        return new WP_REST_Response([ 'ok' => true, 'user_id' => $hide_user_id ], 200);
+    }
+
+    public static function remove_hidden_all_user( WP_REST_Request $req ) {
+        $user_id = get_current_user_id();
+        $hide_user_id = (int) $req['user_id'];
+        if ( $user_id <= 0 ) {
+            return new WP_REST_Response([ 'error' => 'unauthorized' ], 401);
+        }
+        if ( $hide_user_id <= 0 ) {
+            return new WP_REST_Response([ 'error' => 'invalid_user' ], 400);
+        }
+
+        $hidden_ids = self::get_hidden_all_user_ids($user_id);
+        $hidden_ids = array_values(array_filter($hidden_ids, function($id) use ($hide_user_id) {
+            return (int) $id !== $hide_user_id;
+        }));
+        update_user_meta($user_id, 'koopo_stories_hide_all_user_ids', $hidden_ids);
+
+        Koopo_Stories_REST::bump_user_feed_salt($user_id);
         Koopo_Stories_REST::bump_global_feed_salt();
         return new WP_REST_Response([ 'ok' => true, 'user_id' => $hide_user_id ], 200);
     }

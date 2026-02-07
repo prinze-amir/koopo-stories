@@ -116,6 +116,22 @@ class Koopo_Stories_Profile
 
         echo '<h4>' . __('Stories Settings', 'koopo') . '</h4>';
 
+        // Close Friends Manager (inline)
+        if ( class_exists('Koopo_Stories_Close_Friends_UI') ) {
+            echo '<div style="margin-top:20px;">';
+            echo '<h5>' . __('Close Friends List', 'koopo') . '</h5>';
+            echo '<p>' . __('Manage who is in your close friends list.', 'koopo') . '</p>';
+            echo Koopo_Stories_Close_Friends_UI::shortcode_manager();
+            echo '</div>';
+        }
+
+        // Hide All Stories Manager
+        if ( class_exists('Koopo_Stories_Close_Friends_UI') ) {
+            echo '<div style="margin-top:20px;">';
+            echo do_shortcode('[koopo_hide_all_manager]');
+            echo '</div>';
+        }
+
         // Link to Archive
         $archive_link = bp_loggedin_user_domain() . 'stories/archive/';
         echo '<div style="margin-bottom:20px; padding:15px; background:#f9f9f9; border-radius:5px;">';
@@ -123,11 +139,6 @@ class Koopo_Stories_Profile
         echo __('View your past stories affecting your profile.', 'koopo') . ' <a href="' . esc_url($archive_link) . '" class="button small">' . __('View Archive', 'koopo') . '</a>';
         echo '</div>';
 
-        // Close Friends Manager
-        echo '<div style="margin-top:20px;">';
-        echo '<h5>' . __('Close Friends List', 'koopo') . '</h5>';
-        echo '<p>' . __('Manage who is in your close friends list.', 'koopo') . '</p>';
-        echo do_shortcode('[koopo_close_friends_manager]');
-        echo '</div>';
+        
     }
 }

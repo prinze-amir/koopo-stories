@@ -21,6 +21,11 @@ class Koopo_Stories_Permissions {
             return false;
         }
 
+        // Global hidden list (hide all stories from specific users).
+        if ( self::is_hidden_globally($author_id, $viewer_id) ) {
+            return false;
+        }
+
         // Per-story hidden user list (does not block user globally).
         if ( self::is_hidden_from_story($story_id, $viewer_id) ) {
             return false;
@@ -56,6 +61,17 @@ class Koopo_Stories_Permissions {
     public static function is_hidden_from_story( int $story_id, int $viewer_id ) : bool {
         if ( $story_id <= 0 || $viewer_id <= 0 ) return false;
         $hidden = get_post_meta($story_id, 'hide_from_user_ids', true);
+        if ( empty($hidden) ) return false;
+        if ( is_string($hidden) ) {
+            $hidden = array_filter(array_map('intval', explode(',', $hidden)));
+        }
+        if ( ! is_array($hidden) ) return false;
+        return in_array($viewer_id, array_map('intval', $hidden), true);
+    }
+
+    public static function is_hidden_globally( int $author_id, int $viewer_id ) : bool {
+        if ( $author_id <= 0 || $viewer_id <= 0 ) return false;
+        $hidden = get_user_meta($author_id, 'koopo_stories_hide_all_user_ids', true);
         if ( empty($hidden) ) return false;
         if ( is_string($hidden) ) {
             $hidden = array_filter(array_map('intval', explode(',', $hidden)));

@@ -90,6 +90,25 @@ class Koopo_Stories_REST {
             ],
         ] );
 
+        register_rest_route( Koopo_Stories_Module::REST_NS, '/stories/hide-all', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [ 'Koopo_Stories_REST_Story', 'get_hidden_all_users' ],
+            'permission_callback' => [ __CLASS__, 'must_be_logged_in' ],
+        ] );
+
+        register_rest_route( Koopo_Stories_Module::REST_NS, '/stories/hide-all/(?P<user_id>\d+)', [
+            [
+                'methods' => WP_REST_Server::CREATABLE,
+                'callback' => [ 'Koopo_Stories_REST_Story', 'add_hidden_all_user' ],
+                'permission_callback' => [ __CLASS__, 'must_be_logged_in' ],
+            ],
+            [
+                'methods' => WP_REST_Server::DELETABLE,
+                'callback' => [ 'Koopo_Stories_REST_Story', 'remove_hidden_all_user' ],
+                'permission_callback' => [ __CLASS__, 'must_be_logged_in' ],
+            ],
+        ] );
+
         register_rest_route( Koopo_Stories_Module::REST_NS, '/stories/archive', [
             'methods' => WP_REST_Server::READABLE,
             'callback' => [ 'Koopo_Stories_REST_Feed', 'get_archived_stories' ],

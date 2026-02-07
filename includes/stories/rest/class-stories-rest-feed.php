@@ -316,14 +316,12 @@ class Koopo_Stories_REST_Feed {
             return new WP_REST_Response($cached, 200);
         }
 
-        $stories = get_posts([
+        $archived_story_ids = get_posts([
             'post_type' => Koopo_Stories_Module::CPT_STORY,
             'post_status' => 'any',
             'author' => $user_id,
-            'posts_per_page' => $limit,
-            'paged' => $page,
-            'orderby' => 'date',
-            'order' => 'DESC',
+            'posts_per_page' => -1,
+            'fields' => 'ids',
             'meta_query' => [
                 [
                     'key' => 'is_archived',
@@ -335,48 +333,68 @@ class Koopo_Stories_REST_Feed {
         ]);
 
         $out = [];
-        foreach ( $stories as $story ) {
-            $sid = (int) $story->ID;
-            $items = get_posts([
+        $archived_story_ids = array_values(array_filter(array_map('intval', is_array($archived_story_ids) ? $archived_story_ids : [])));
+        if ( ! empty($archived_story_ids) ) {
+            $query = new WP_Query([
                 'post_type' => Koopo_Stories_Module::CPT_ITEM,
                 'post_status' => 'publish',
-                'fields' => 'ids',
-                'posts_per_page' => -1,
-                'meta_key' => 'story_id',
-                'meta_value' => $sid,
+                'posts_per_page' => $limit,
+                'paged' => $page,
                 'orderby' => 'date',
-                'order' => 'ASC',
+                'order' => 'DESC',
+                'meta_query' => [
+                    [
+                        'key' => 'story_id',
+                        'value' => $archived_story_ids,
+                        'compare' => 'IN',
+                        'type' => 'NUMERIC',
+                    ],
+                ],
             ]);
 
-            $items_count = is_array($items) ? count($items) : 0;
-            if ( $items_count === 0 ) continue;
+            $story_cache = [];
+            foreach ( $query->posts as $item_post ) {
+                $item_id = (int) $item_post->ID;
+                $sid = (int) get_post_meta($item_id, 'story_id', true);
+                if ( $sid <= 0 ) continue;
 
-            $author_id = (int) $story->post_author;
-            $cover_thumb = '';
-            if ( ! empty($items) ) {
-                $first_item_id = (int) $items[0];
-                $cover_thumb = Koopo_Stories_Utils::get_story_cover_thumb($first_item_id, 'thumbnail');
+                if ( ! isset($story_cache[$sid]) ) {
+                    $story_cache[$sid] = get_post($sid);
+                }
+                $story = $story_cache[$sid];
+                if ( ! $story ) continue;
+
+                $author_id = (int) $story->post_author;
+                $item_payload = Koopo_Stories_Utils::build_story_item_payload($item_id, false);
+                $cover_thumb = Koopo_Stories_Utils::get_story_cover_thumb($item_id, 'thumbnail');
+                $item_type = is_array($item_payload) ? ($item_payload['type'] ?? 'image') : 'image';
+                $item_src = is_array($item_payload) ? ($item_payload['src'] ?? '') : '';
+                $privacy = Koopo_Stories_REST::normalize_privacy(get_post_meta($sid, 'privacy', true));
+
+                $out[] = [
+                    'story_id' => $sid,
+                    'item_id' => $item_id,
+                    'is_archive_item' => true,
+                    'author' => Koopo_Stories_Utils::get_author_payload($author_id, 96, true),
+                    'cover_thumb' => $cover_thumb,
+                    'item_type' => $item_type,
+                    'item_src' => $item_src,
+                    'last_updated' => get_post_modified_time(DATE_ATOM, true, $item_id),
+                    'created_at' => mysql_to_rfc3339( get_gmt_from_date($item_post->post_date) ),
+                    'has_unseen' => false,
+                    'unseen_count' => 0,
+                    'items_count' => 1,
+                    'privacy' => $privacy,
+                    'view_count' => Koopo_Stories_Views_Table::get_view_count($item_id),
+                    'is_archived' => true,
+                ];
             }
 
-            $privacy = Koopo_Stories_REST::normalize_privacy(get_post_meta($sid, 'privacy', true));
-
-            $out[] = [
-                'story_id' => $sid,
-                'story_ids' => [ $sid ],
-                'author' => Koopo_Stories_Utils::get_author_payload($author_id, 96, true),
-                'cover_thumb' => $cover_thumb,
-                'last_updated' => get_post_modified_time(DATE_ATOM, true, $sid),
-                'created_at' => mysql_to_rfc3339( get_gmt_from_date($story->post_date) ),
-                'has_unseen' => false,
-                'unseen_count' => 0,
-                'items_count' => $items_count,
-                'privacy' => $privacy,
-                'view_count' => Koopo_Stories_Views_Table::get_story_view_count($items),
-                'is_archived' => true,
-            ];
+            $total = isset($query->found_posts) ? (int) $query->found_posts : 0;
+            $has_more = ($page * $limit) < $total;
+        } else {
+            $has_more = false;
         }
-
-        $has_more = count($out) === $limit;
 
         $payload = [
             'api_version' => Koopo_Stories_REST::API_VERSION,

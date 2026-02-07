@@ -174,13 +174,19 @@ final class Koopo_Stories_Module
         wp_enqueue_script('koopo-stories');
 
         $current_user_id = get_current_user_id();
+        $me_avatar = $current_user_id > 0
+            ? Koopo_Stories_Utils::get_avatar_url_cached($current_user_id, 96)
+            : '';
         wp_localize_script('koopo-stories', 'KoopoStories', [
             'restUrl' => esc_url_raw(rest_url(self::REST_NS . '/stories')),
             'nonce' => wp_create_nonce('wp_rest'),
             'me' => $current_user_id,
-            'meAvatar' => get_avatar_url($current_user_id, ['size' => 96]),
+            'meAvatar' => $me_avatar,
             'viewerSrc' => defined('KOOPO_STORIES_VIEWER_JS') ? KOOPO_STORIES_VIEWER_JS : '',
             'composerSrc' => defined('KOOPO_STORIES_COMPOSER_JS') ? KOOPO_STORIES_COMPOSER_JS : '',
+            'shareAjaxUrl' => admin_url('admin-ajax.php'),
+            'shareNonce' => wp_create_nonce('koopo_stories_share'),
+            'shareStoryToActivity' => get_option('koopo_stories_share_story_to_activity', '1') === '1',
         ]);
 
         wp_localize_script('koopo-stories', 'KoopoStoriesI18n', [
@@ -191,13 +197,20 @@ final class Koopo_Stories_Module
             'close' => __('Close', 'koopo'),
             'save' => __('Save', 'koopo'),
             'hide_users_title' => __('Hide from specific users', 'koopo'),
+            'hide_all_users_title' => __('Hide all stories from', 'koopo'),
             'search_username' => __('Search by username', 'koopo'),
             'add_hidden' => __('Add to hidden list', 'koopo'),
+            'add_hidden_all' => __('Add to hidden all list', 'koopo'),
             'no_hidden_users' => __('No hidden users yet.', 'koopo'),
+            'no_hidden_all_users' => __('No users hidden from all stories yet.', 'koopo'),
             'remove' => __('Remove', 'koopo'),
             'remove_hidden_failed' => __('Failed to remove user. Please try again.', 'koopo'),
             'select_user_hide' => __('Select a user to hide.', 'koopo'),
             'hide_user_failed' => __('Failed to hide user. Please try again.', 'koopo'),
+            'close_friends_title' => __('Close friends', 'koopo'),
+            'add_close_friend' => __('Add to close friends', 'koopo'),
+            'no_close_friends' => __('No close friends yet.', 'koopo'),
+            'close_friends_failed' => __('Failed to update close friends. Please try again.', 'koopo'),
             'delete_story' => __('Delete story', 'koopo'),
             'archive_story' => __('Archive story', 'koopo'),
             'unarchive_story' => __('Repost story', 'koopo'),
