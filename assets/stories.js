@@ -15,6 +15,10 @@
       if (!u.searchParams.has('compact')) {
         u.searchParams.set('compact', '1');
       }
+      // Always include stickers even in compact mode
+      if (!u.searchParams.has('include_stickers')) {
+        u.searchParams.set('include_stickers', '1');
+      }
       return u.toString();
     } catch (e) {
       return url;

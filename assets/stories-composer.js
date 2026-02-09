@@ -42,6 +42,17 @@
     const panel = el('div', { class: 'koopo-stories__composer-panel' });
     const title = el('div', { class: 'koopo-stories__composer-title', html: 'Post a story' });
 
+    // Loading overlay for submission
+    const loadingOverlay = el('div', { class: 'koopo-stories__composer-loading' });
+    const loadingSpinner = el('div', { class: 'koopo-stories__spinner' });
+    const loadingText = el('div', { class: 'koopo-stories__composer-loading-text' });
+    loadingText.textContent = 'Uploading...';
+    const loadingCheck = el('div', { class: 'koopo-stories__composer-loading-check' });
+    loadingCheck.innerHTML = '✓';
+    loadingOverlay.appendChild(loadingSpinner);
+    loadingOverlay.appendChild(loadingText);
+    loadingOverlay.appendChild(loadingCheck);
+
     const preview = el('div', {
       class: 'koopo-stories__composer-preview',
       style: 'position:relative;display:flex;align-items:center;justify-content:center;'
@@ -294,6 +305,10 @@
       postBtn.disabled = true;
       status.textContent = 'Uploading...';
 
+      // Show loading overlay
+      loadingText.textContent = 'Uploading your story...';
+      loadingOverlay.classList.add('is-active');
+
       const fd = new FormData();
       fd.append('file', composerFile);
       fd.append('privacy', privacySelect.value);
@@ -304,6 +319,7 @@
         // If stickers were added, attach them to the story
         if (pendingStickers.length > 0 && response.story_id && response.item_id) {
           status.textContent = 'Adding stickers...';
+          loadingText.textContent = 'Adding stickers...';
 
           for (const sticker of pendingStickers) {
             try {
@@ -325,6 +341,7 @@
 
         if (window.KoopoStories && window.KoopoStories.shareStoryToActivity && shareActivityCheckbox.checked && response.story_id) {
           status.textContent = 'Sharing to activity...';
+          loadingText.textContent = 'Sharing to activity...';
           try {
             const form = new FormData();
             form.append('action', 'koopo_stories_share_story_activity');
@@ -346,11 +363,14 @@
         }
 
         status.textContent = 'Posted!';
+        loadingText.textContent = 'Story posted!';
+        loadingOverlay.classList.add('is-success');
         // Refresh all trays/widgets on page
         document.querySelectorAll('.koopo-stories').forEach(c => refreshTray(c));
-        setTimeout(close, 400);
+        setTimeout(close, 1200);
       } catch (e) {
         status.textContent = e.message || 'Upload failed';
+        loadingOverlay.classList.remove('is-active');
         cancelBtn.disabled = false;
         postBtn.disabled = false;
       }
@@ -363,6 +383,7 @@
     panel.appendChild(privacyWrap);
     panel.appendChild(actions);
     panel.appendChild(status);
+    panel.appendChild(loadingOverlay);
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
     overlay.focus();
@@ -515,10 +536,10 @@
         };
         assignStickerCid(sticker);
         pendingStickers.push(sticker);
-        const stickerPreview = createStickerElement(sticker, pendingStickers, previewWrap, assignStickerCid);
+        const stickerPreview = createStickerElement(sticker, pendingStickers, preview, assignStickerCid);
         if (stickerPreview) {
-          previewWrap.appendChild(stickerPreview);
-          makeDraggable(stickerPreview, previewWrap, sticker.position);
+          preview.appendChild(stickerPreview);
+          makeDraggable(stickerPreview, preview, sticker.position);
         }
         overlay.remove();
       };
@@ -1165,13 +1186,13 @@
       pendingStickers.push(sticker);
 
       // Show preview of sticker on the media
-      const stickerPreview = createStickerElement(sticker, pendingStickers, previewWrap, assignStickerCid);
+      const stickerPreview = createStickerElement(sticker, pendingStickers, preview, assignStickerCid);
       if (stickerPreview) {
         stickerPreview.style.cursor = 'move';
-        previewWrap.appendChild(stickerPreview);
+        preview.appendChild(stickerPreview);
 
         // Make sticker draggable within preview
-        makeDraggable(stickerPreview, previewWrap, sticker.position);
+        makeDraggable(stickerPreview, preview, sticker.position);
       }
 
       closeModal();
