@@ -76,6 +76,36 @@ class Koopo_Stories_Views_Table {
     }
 
     /**
+     * Get total view counts for multiple story items
+     */
+    public static function get_view_counts( array $item_ids ) : array {
+        global $wpdb;
+        $table = self::table_name();
+        $item_ids = array_values(array_unique(array_filter(array_map('intval', $item_ids))));
+        if ( empty($item_ids) ) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($item_ids), '%d'));
+        $rows = $wpdb->get_results( $wpdb->prepare(
+            "SELECT story_item_id, COUNT(DISTINCT viewer_user_id) AS view_count
+             FROM {$table}
+             WHERE story_item_id IN ({$placeholders})
+             GROUP BY story_item_id",
+            $item_ids
+        ), ARRAY_A);
+
+        $counts = [];
+        if ( is_array($rows) ) {
+            foreach ( $rows as $row ) {
+                $counts[(int) ($row['story_item_id'] ?? 0)] = (int) ($row['view_count'] ?? 0);
+            }
+        }
+
+        return $counts;
+    }
+
+    /**
      * Get total view count for all items in a story
      */
     public static function get_story_view_count( array $item_ids ) : int {

@@ -3,18 +3,36 @@
  * Plugin Name: Koopo Stories
  * Plugin URI: http://www.docs.koopoonline.com/
  * Description: Custom blocks and shortcodes for advance features.
- * Version: 2.5.1
+ * Version: 2.5.8
  * Author: Plu2oprinze
  * Author URI: http://www.koopoonline.com
  */
 
 define( 'KOOPO_STORIES_PATH', plugin_dir_path( __FILE__ ) );
 
+/**
+ * Register the optional Stories adapter after the bridge has established its
+ * extension point. The adapter class itself is loaded lazily so Stories keeps
+ * working when the bridge plugin is inactive.
+ */
+add_action(
+    'koopo_media_gateway_register_adapters',
+    static function ( $adapters, $policy, $client, $coordinator ) {
+        require_once KOOPO_STORIES_PATH . 'includes/stories/class-stories-media-gateway-adapter.php';
+        $adapters->register( new Koopo_Stories_Media_Gateway_Adapter( $coordinator, $policy ) );
+    },
+    10,
+    4
+);
+
 
 // Ensure Stories are enabled by default on fresh installs (can be disabled in Stories Settings).
 register_activation_hook(__FILE__, function () {
     if ( get_option('koopo_enable_stories', null) === null ) {
         add_option('koopo_enable_stories', '1');
+    }
+    if ( get_option('koopo_stories_default_privacy', null) === null ) {
+        add_option('koopo_stories_default_privacy', 'public');
     }
 
     // Install database tables for Stories feature
@@ -62,7 +80,7 @@ function koopo_stories_load_textdomain() {
 add_action( 'plugins_loaded', function () {
     // Define Stories version constant
     if ( ! defined('KOOPO_STORIES_VER') ) {
-        define('KOOPO_STORIES_VER', '1.0.0');
+        define('KOOPO_STORIES_VER', '2.5.8');
     }
 
     // Load Stories module directly

@@ -117,7 +117,7 @@ class Koopo_Stories_Reports {
     /**
      * Get all reports for a story
      */
-    public static function get_story_reports( int $story_id, string $status = null ) : array {
+    public static function get_story_reports( int $story_id, ?string $status = null ) : array {
         global $wpdb;
         $table = $wpdb->prefix . self::TABLE_NAME;
 
@@ -145,11 +145,23 @@ class Koopo_Stories_Reports {
         $table = $wpdb->prefix . self::TABLE_NAME;
 
         $results = $wpdb->get_results( $wpdb->prepare(
-            "SELECT r.*, COUNT(*) as report_count
-             FROM `{$table}` r
-             WHERE r.status = 'pending'
-             GROUP BY r.story_id
-             ORDER BY report_count DESC, r.created_at DESC
+            "SELECT latest.*, grouped.report_count
+             FROM (
+                SELECT story_id, COUNT(*) AS report_count
+                FROM `{$table}`
+                WHERE status = 'pending'
+                GROUP BY story_id
+             ) grouped
+             INNER JOIN `{$table}` latest
+                ON latest.id = (
+                    SELECT r2.id
+                    FROM `{$table}` r2
+                    WHERE r2.story_id = grouped.story_id
+                      AND r2.status = 'pending'
+                    ORDER BY r2.created_at DESC, r2.id DESC
+                    LIMIT 1
+                )
+             ORDER BY grouped.report_count DESC, latest.created_at DESC, latest.id DESC
              LIMIT %d OFFSET %d",
             $limit,
             $offset
@@ -161,7 +173,7 @@ class Koopo_Stories_Reports {
     /**
      * Update report status
      */
-    public static function update_report_status( int $report_id, string $status, int $reviewer_id, string $action_taken = null ) : bool {
+    public static function update_report_status( int $report_id, string $status, int $reviewer_id, ?string $action_taken = null ) : bool {
         global $wpdb;
         $table = $wpdb->prefix . self::TABLE_NAME;
 
@@ -189,7 +201,7 @@ class Koopo_Stories_Reports {
     /**
      * Update all reports for a story
      */
-    public static function update_story_reports( int $story_id, string $status, int $reviewer_id, string $action_taken = null ) : bool {
+    public static function update_story_reports( int $story_id, string $status, int $reviewer_id, ?string $action_taken = null ) : bool {
         global $wpdb;
         $table = $wpdb->prefix . self::TABLE_NAME;
 

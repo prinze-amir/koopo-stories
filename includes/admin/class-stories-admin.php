@@ -62,8 +62,11 @@ final class Koopo_Stories_Admin
         register_setting(self::SETTINGS_GROUP, 'koopo_stories_default_privacy', [
             'type' => 'string',
             'sanitize_callback' => function ($v) {
-                return in_array($v, ['public', 'connections'], true) ? $v : 'connections'; },
-            'default' => 'connections',
+                if (class_exists('Koopo_Stories_Utils')) {
+                    return Koopo_Stories_Utils::normalize_privacy($v, 'public');
+                }
+                return in_array($v, ['public', 'friends', 'close_friends', 'connections'], true) ? ($v === 'connections' ? 'friends' : $v) : 'public'; },
+            'default' => 'public',
         ]);
 
         register_setting(self::SETTINGS_GROUP, 'koopo_stories_duration_hours', [
@@ -562,10 +565,13 @@ final class Koopo_Stories_Admin
 
     public static function field_privacy(): void
     {
-        $v = get_option('koopo_stories_default_privacy', 'connections');
+        $v = class_exists('Koopo_Stories_Utils')
+            ? Koopo_Stories_Utils::normalize_privacy(get_option('koopo_stories_default_privacy', 'public'), 'public')
+            : get_option('koopo_stories_default_privacy', 'public');
         echo '<select name="koopo_stories_default_privacy">';
-        echo '<option value="connections"' . selected($v, 'connections', false) . '>' . esc_html__('Connections only', 'koopo') . '</option>';
         echo '<option value="public"' . selected($v, 'public', false) . '>' . esc_html__('All members', 'koopo') . '</option>';
+        echo '<option value="friends"' . selected($v, 'friends', false) . '>' . esc_html__('Friends only', 'koopo') . '</option>';
+        echo '<option value="close_friends"' . selected($v, 'close_friends', false) . '>' . esc_html__('Close friends', 'koopo') . '</option>';
         echo '</select>';
     }
 

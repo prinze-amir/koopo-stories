@@ -11,6 +11,12 @@
     el,
     refreshTray,
   } = window.KoopoStoriesUI;
+  const activitySharePrivacies = new Set(
+    Array.isArray(window.KoopoStories?.activitySharePrivacies)
+      ? window.KoopoStories.activitySharePrivacies
+      : ['public', 'friends']
+  );
+  const activityShareUnsupportedMessage = window.KoopoStories?.activityShareUnsupportedMessage || 'This privacy cannot be preserved when sharing to activity.';
 
   // Viewer singleton
   const Viewer = (() => {
@@ -32,6 +38,7 @@
     let isTransitioning = false;
     let navToken = 0;
     let viewerClosed = false;
+    let activePollModal = null;
     function ensure() {
       if (root) return;
       barsWrap = el('div', { class: 'koopo-stories__progress' });
@@ -273,6 +280,10 @@
     function close() {
       if (!root) return;
       viewerClosed = true;
+      if (activePollModal) {
+        activePollModal.remove();
+        activePollModal = null;
+      }
       navToken += 1;
       isTransitioning = false;
       pendingAdvance = false;
@@ -377,7 +388,13 @@
       if (item.type === 'video') {
         const vid = document.createElement('video');
         vid.className = 'koopo-stories__media';
-        vid.src = item.src;
+        const nativeHls = !!(
+          item.media_status === 'ready'
+          && item.hls_src
+          && vid.canPlayType('application/vnd.apple.mpegurl')
+        );
+        vid.src = nativeHls ? item.hls_src : item.src;
+        if (item.poster) vid.poster = item.poster;
         vid.playsInline = true;
         vid.muted = isMuted;
         vid.autoplay = true;
@@ -881,7 +898,9 @@
       }
 
       if (content) {
-        applyStickerPresentation(content, sticker);
+        if (sticker.type !== 'poll') {
+          applyStickerPresentation(content, sticker);
+        }
         wrapper.appendChild(content);
         return wrapper;
       }
@@ -889,87 +908,220 @@
       return null;
     }
 
-    // Create interactive poll sticker
-    function createPollSticker(sticker) {
-      const pollData = sticker.data;
+    function showPollModal(sticker, trigger) {
+      if (activePollModal) return;
 
-      const pollContainer = el('div', {
-        class: 'koopo-stories__sticker-poll',
-        style: 'background:rgba(255,255,255,0.95);color:#000;padding:16px;border-radius:16px;min-width:250px;max-width:300px;box-shadow:0 4px 12px rgba(0,0,0,0.3);'
+      const pollData = sticker.data || {};
+      const options = Array.isArray(pollData.options) ? pollData.options : [];
+      const frozenProgress = currentProgress();
+      const currentVideo = stage.querySelector('video.koopo-stories__media');
+      const resumeVideo = !!currentVideo && !currentVideo.paused && !currentVideo.ended;
+      let busy = false;
+
+      paused = true;
+      if (currentVideo) currentVideo.pause();
+
+      const overlay = el('div', {
+        class: 'koopo-stories__poll-modal',
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-labelledby': `koopo-story-poll-${sticker.id}`,
+        tabindex: '-1',
       });
-
-      // Question
+      const backdrop = el('button', {
+        class: 'koopo-stories__poll-modal-backdrop',
+        type: 'button',
+        'aria-label': 'Close poll',
+      });
+      const panel = el('div', { class: 'koopo-stories__poll-modal-panel' });
+      const header = el('div', { class: 'koopo-stories__poll-modal-header' });
+      const heading = el('div', { class: 'koopo-stories__poll-modal-heading' });
+      const eyebrow = el('div', { class: 'koopo-stories__poll-modal-eyebrow' });
       const question = el('div', {
-        style: 'font-weight:600;font-size:15px;margin-bottom:12px;'
+        class: 'koopo-stories__poll-modal-question',
+        id: `koopo-story-poll-${sticker.id}`,
       });
-      question.textContent = pollData.question;
-      pollContainer.appendChild(question);
+      const closeButton = el('button', {
+        class: 'koopo-stories__poll-modal-close',
+        type: 'button',
+        'aria-label': 'Close poll',
+      });
+      const body = el('div', { class: 'koopo-stories__poll-modal-body' });
+      const optionsWrap = el('div', { class: 'koopo-stories__poll-modal-options' });
+      const status = el('div', {
+        class: 'koopo-stories__poll-modal-status',
+        'aria-live': 'polite',
+      });
+      const total = el('div', { class: 'koopo-stories__poll-modal-total' });
+      const doneButton = el('button', {
+        class: 'koopo-stories__poll-modal-done',
+        type: 'button',
+      });
 
-      // Calculate total votes
-      const totalVotes = pollData.options.reduce((sum, opt) => sum + (opt.votes || 0), 0);
+      closeButton.innerHTML = '<span class="dashicons dashicons-no-alt" aria-hidden="true"></span>';
+      question.textContent = (pollData.question || '').trim() || 'Poll';
+      heading.appendChild(eyebrow);
+      heading.appendChild(question);
+      header.appendChild(heading);
+      header.appendChild(closeButton);
+      body.appendChild(optionsWrap);
+      body.appendChild(status);
+      body.appendChild(total);
+      body.appendChild(doneButton);
+      panel.appendChild(header);
+      panel.appendChild(body);
+      overlay.appendChild(backdrop);
+      overlay.appendChild(panel);
 
-      // Options
-      pollData.options.forEach((option, idx) => {
-        const votes = option.votes || 0;
-        const percentage = totalVotes > 0 ? Math.round((votes / totalVotes) * 100) : 0;
+      const selectedOptionIndex = () => (
+        Number.isInteger(pollData.user_vote) ? pollData.user_vote : -1
+      );
 
-        const optionEl = el('div', {
-          class: 'koopo-stories__poll-option',
-          style: 'position:relative;background:#f0f0f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer;overflow:hidden;'
-        });
+      const totalVotes = () => options.reduce(
+        (sum, option) => sum + Number(option?.votes || 0),
+        0
+      );
 
-        // Progress bar
-        const progressBar = el('div', {
-          style: `position:absolute;top:0;left:0;bottom:0;width:${percentage}%;background:rgba(0,123,255,0.2);transition:width 0.3s;z-index:0;border-radius:8px;`
-        });
-        optionEl.appendChild(progressBar);
-
-        // Option content
-        const optionContent = el('div', { style: 'position:relative;z-index:1;display:flex;justify-content:space-between;align-items:center;' });
-        const optionText = el('span', { style: 'font-size:14px;font-weight:500;' });
-        optionText.textContent = option.text;
-        const optionVotes = el('span', { style: 'font-size:12px;opacity:0.7;font-weight:600;' });
-        optionVotes.textContent = `${percentage}%`;
-        optionContent.appendChild(optionText);
-        optionContent.appendChild(optionVotes);
-        optionEl.appendChild(optionContent);
-
-        // Vote handler
-        optionEl.onclick = async (e) => {
-          e.stopPropagation();
-          try {
-            const fd = new FormData();
-            fd.append('option_index', String(idx));
-            await apiPost(`${API_BASE.replace('/stories', '')}/stickers/${sticker.id}/vote`, fd);
-
-            // Update votes locally
-            pollData.options[idx].votes = (pollData.options[idx].votes || 0) + 1;
-
-            // Re-render poll
-            const parent = pollContainer.parentElement;
-            if (parent) {
-              parent.removeChild(pollContainer);
-              const newPoll = createPollSticker(sticker);
-              parent.appendChild(newPoll);
-            }
-          } catch (err) {
-            console.error('Failed to vote:', err);
+      const closeModal = () => {
+        if (busy || !activePollModal) return;
+        activePollModal.classList.add('is-closing');
+        setTimeout(() => {
+          if (activePollModal) {
+            activePollModal.remove();
+            activePollModal = null;
           }
-        };
+          paused = false;
+          startTs = performance.now() - frozenProgress * duration;
+          if (resumeVideo && currentVideo && currentVideo.isConnected) {
+            currentVideo.play().catch(() => {});
+          }
+          loop();
+          if (trigger && trigger.isConnected) trigger.focus();
+        }, 180);
+      };
 
-        pollContainer.appendChild(optionEl);
+      const renderOptions = () => {
+        const selectedIndex = selectedOptionIndex();
+        const hasResult = selectedIndex >= 0;
+        const voteTotal = totalVotes();
+
+        eyebrow.textContent = hasResult ? 'Vote counted' : 'Story poll';
+        doneButton.textContent = hasResult ? 'Done' : 'Cancel';
+        total.textContent = `${voteTotal} vote${voteTotal === 1 ? '' : 's'}`;
+        optionsWrap.innerHTML = '';
+
+        options.forEach((option, index) => {
+          const votes = Number(option?.votes || 0);
+          const percentage = voteTotal > 0 ? Math.round((votes / voteTotal) * 100) : 0;
+          const selected = selectedIndex === index;
+          const optionButton = el('button', {
+            type: 'button',
+            class: `koopo-stories__poll-modal-option${selected ? ' is-selected' : ''}`,
+            'aria-pressed': selected ? 'true' : 'false',
+          });
+          const fill = el('span', {
+            class: 'koopo-stories__poll-modal-option-fill',
+            style: `width:${hasResult ? percentage : 0}%;`,
+          });
+          const row = el('span', { class: 'koopo-stories__poll-modal-option-row' });
+          const label = el('span', { class: 'koopo-stories__poll-modal-option-text' });
+          const meta = el('span', { class: 'koopo-stories__poll-modal-option-meta' });
+
+          label.textContent = option && option.text ? option.text : '';
+          meta.textContent = hasResult ? `${selected ? '✓ ' : ''}${percentage}%` : '○';
+          row.appendChild(label);
+          row.appendChild(meta);
+          optionButton.appendChild(fill);
+          optionButton.appendChild(row);
+          optionButton.disabled = busy || hasResult;
+
+          optionButton.addEventListener('click', async () => {
+            if (busy || selectedOptionIndex() >= 0) return;
+            busy = true;
+            status.classList.remove('is-error');
+            status.textContent = 'Recording your vote...';
+            overlay.classList.add('is-busy');
+            renderOptions();
+
+            try {
+              const fd = new FormData();
+              fd.append('option_index', String(index));
+              await apiPost(`${API_BASE.replace('/stories', '')}/stickers/${sticker.id}/vote`, fd);
+
+              const previousIndex = selectedOptionIndex();
+              if (previousIndex >= 0 && previousIndex !== index && options[previousIndex]) {
+                options[previousIndex].votes = Math.max(0, Number(options[previousIndex].votes || 0) - 1);
+              }
+              if (previousIndex !== index) {
+                options[index].votes = Number(options[index].votes || 0) + 1;
+              }
+              pollData.user_vote = index;
+              status.textContent = '';
+            } catch (error) {
+              status.classList.add('is-error');
+              status.textContent = error?.message || 'Your vote could not be recorded. Please try again.';
+            } finally {
+              busy = false;
+              overlay.classList.remove('is-busy');
+              renderOptions();
+            }
+          });
+
+          optionsWrap.appendChild(optionButton);
+        });
+      };
+
+      backdrop.addEventListener('click', closeModal);
+      closeButton.addEventListener('click', closeModal);
+      doneButton.addEventListener('click', closeModal);
+      overlay.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closeModal();
+        }
       });
 
-      // Total votes footer
-      if (totalVotes > 0) {
-        const footer = el('div', {
-          style: 'font-size:12px;opacity:0.6;text-align:center;margin-top:8px;'
-        });
-        footer.textContent = `${totalVotes} vote${totalVotes !== 1 ? 's' : ''}`;
-        pollContainer.appendChild(footer);
-      }
+      activePollModal = overlay;
+      renderOptions();
+      document.body.appendChild(overlay);
+      requestAnimationFrame(() => overlay.classList.add('is-open'));
+      closeButton.focus();
+    }
 
-      return pollContainer;
+    // Render a compact poll handle; voting happens in a focused modal.
+    function createPollSticker(sticker) {
+      const pollData = sticker.data || {};
+      const options = Array.isArray(pollData.options) ? pollData.options : [];
+      const totalVotes = options.reduce((sum, opt) => sum + Number(opt?.votes || 0), 0);
+      const pollTrigger = el('button', {
+        class: 'koopo-stories__poll-trigger',
+        type: 'button',
+        'aria-haspopup': 'dialog',
+        'aria-label': `Open poll: ${(pollData.question || '').trim() || 'Poll'}`,
+      });
+      const icon = el('span', { class: 'koopo-stories__poll-trigger-icon' });
+      const copy = el('span', { class: 'koopo-stories__poll-trigger-copy' });
+      const question = el('span', { class: 'koopo-stories__poll-trigger-question' });
+      const meta = el('span', { class: 'koopo-stories__poll-trigger-meta' });
+      const arrow = el('span', {
+        class: 'koopo-stories__poll-trigger-arrow dashicons dashicons-arrow-right-alt2',
+        'aria-hidden': 'true',
+      });
+
+      icon.innerHTML = '<span class="dashicons dashicons-chart-bar" aria-hidden="true"></span>';
+      question.textContent = (pollData.question || '').trim() || 'Poll';
+      meta.textContent = `${totalVotes > 0 ? `${totalVotes} vote${totalVotes === 1 ? '' : 's'}` : `${options.length} options`} · Click to vote`;
+      copy.appendChild(question);
+      copy.appendChild(meta);
+      pollTrigger.appendChild(icon);
+      pollTrigger.appendChild(copy);
+      pollTrigger.appendChild(arrow);
+      pollTrigger.addEventListener('click', (event) => {
+        event.stopPropagation();
+        showPollModal(sticker, pollTrigger);
+      });
+
+      return pollTrigger;
     }
 
     return { open, openLoading, close, resumeStory, currentItemStoryId, currentItemId, launchReactionEffect, holdForReaction };
@@ -1187,9 +1339,18 @@
     if (!canShareToActivity) {
       shareWrap.style.display = 'none';
     } else {
+      const currentPrivacy = storyData.privacy || 'friends';
+      const canShareCurrentPrivacy = activitySharePrivacies.has(currentPrivacy);
+      if (!canShareCurrentPrivacy) {
+        shareActivityBtn.disabled = true;
+        shareActivityBtn.style.cursor = 'not-allowed';
+        shareActivityBtn.style.opacity = '0.6';
+        shareStatus.textContent = activityShareUnsupportedMessage;
+      }
+
       shareActivityBtn.onclick = async () => {
         const storyId = targetStoryId;
-        if (!storyId) return;
+        if (!storyId || !activitySharePrivacies.has(storyData.privacy || 'friends')) return;
         shareActivityBtn.disabled = true;
         shareStatus.textContent = 'Sharing to activity...';
         try {

@@ -9,6 +9,355 @@
     el,
     refreshTray,
   } = window.KoopoStoriesUI;
+  const activitySharePrivacies = new Set(
+    Array.isArray(window.KoopoStories?.activitySharePrivacies)
+      ? window.KoopoStories.activitySharePrivacies
+      : ['public', 'friends']
+  );
+  const activityShareUnsupportedMessage = window.KoopoStories?.activityShareUnsupportedMessage || 'This privacy cannot be preserved when sharing to activity.';
+  const defaultPrivacy = ['public', 'friends', 'close_friends'].includes(window.KoopoStories?.defaultPrivacy)
+    ? window.KoopoStories.defaultPrivacy
+    : 'public';
+  const directUploadConfig = window.KoopoStoriesDirectUpload || {};
+
+  function directRequestId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return `story-${window.crypto.randomUUID()}`;
+    }
+    return `story-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+  }
+
+  function directMimeType(file, kind) {
+    if (file?.type) return String(file.type).toLowerCase();
+    const extension = String(file?.name || '').split('.').pop().toLowerCase();
+    const known = {
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+      gif: 'image/gif',
+      webp: 'image/webp',
+      avif: 'image/avif',
+      mp4: 'video/mp4',
+      m4v: 'video/mp4',
+      webm: 'video/webm',
+    };
+    return known[extension] || (kind === 'video' ? 'video/mp4' : 'image/jpeg');
+  }
+
+  async function directJson(url, method, body, idempotencyKey = '') {
+    const requestHeaders = {
+      'Content-Type': 'application/json',
+      'X-WP-Nonce': directUploadConfig.nonce || window.KoopoStories?.nonce || '',
+    };
+    if (idempotencyKey) requestHeaders['Idempotency-Key'] = idempotencyKey;
+    const response = await fetch(url, {
+      method,
+      credentials: 'same-origin',
+      headers: requestHeaders,
+      body: body == null ? undefined : JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(payload?.message || payload?.error || 'Direct Story upload failed');
+      error.status = response.status;
+      error.payload = payload;
+      throw error;
+    }
+    return payload;
+  }
+
+  function xhrUpload(url, method, file, headers, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(method, url, true);
+      Object.entries(headers || {}).forEach(([name, value]) => xhr.setRequestHeader(name, String(value)));
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable && typeof onProgress === 'function') {
+          onProgress(event.loaded, event.total);
+        }
+      });
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(xhr);
+          return;
+        }
+        reject(new Error(`Media upload failed (${xhr.status || 'network'})`));
+      });
+      xhr.addEventListener('error', () => reject(new Error('Media upload failed')));
+      xhr.addEventListener('abort', () => reject(new Error('Media upload was cancelled')));
+      xhr.send(file);
+    });
+  }
+
+  function encodeTusMetadata(value) {
+    const bytes = new TextEncoder().encode(String(value || ''));
+    let binary = '';
+    bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+    return window.btoa(binary);
+  }
+
+  async function uploadTus(file, instruction, onProgress) {
+    const createHeaders = {
+      ...(instruction.headers || {}),
+      'Tus-Resumable': '1.0.0',
+      'Upload-Length': String(file.size),
+      'Upload-Metadata': `filename ${encodeTusMetadata(file.name)},filetype ${encodeTusMetadata(file.type)}`,
+    };
+    const createResponse = await fetch(instruction.url, {
+      method: 'POST',
+      headers: createHeaders,
+    });
+    if (!createResponse.ok) {
+      throw new Error(`Video upload could not start (${createResponse.status})`);
+    }
+    const location = createResponse.headers.get('Location');
+    if (!location) {
+      throw new Error('Video upload did not return a resumable upload location');
+    }
+    const uploadUrl = new URL(location, instruction.url).toString();
+    const chunkSize = 8 * 1024 * 1024;
+    const patchHeaders = {
+      ...(instruction.headers || {}),
+      'Tus-Resumable': '1.0.0',
+      'Content-Type': 'application/offset+octet-stream',
+    };
+    const readOffset = async () => {
+      const response = await fetch(uploadUrl, {
+        method: 'HEAD',
+        headers: {
+          ...(instruction.headers || {}),
+          'Tus-Resumable': '1.0.0',
+        },
+      });
+      if (!response.ok) throw new Error(`Video upload could not resume (${response.status})`);
+      return Number(response.headers.get('Upload-Offset') || 0);
+    };
+
+    let offset = 0;
+    while (offset < file.size) {
+      const chunk = file.slice(offset, Math.min(file.size, offset + chunkSize), file.type);
+      let uploaded = false;
+      let lastError = null;
+      for (let attempt = 0; attempt < 5 && !uploaded; attempt += 1) {
+        try {
+          const xhr = await xhrUpload(uploadUrl, 'PATCH', chunk, {
+            ...patchHeaders,
+            'Upload-Offset': String(offset),
+          }, (loaded) => onProgress?.(offset + loaded, file.size));
+          const serverOffset = Number(xhr.getResponseHeader('Upload-Offset'));
+          offset = Number.isFinite(serverOffset) && serverOffset > offset
+            ? serverOffset
+            : offset + chunk.size;
+          uploaded = true;
+        } catch (error) {
+          lastError = error;
+          if (attempt >= 4) break;
+          await new Promise((resolve) => window.setTimeout(resolve, [0, 1000, 3000, 5000][attempt] || 5000));
+          offset = await readOffset();
+        }
+      }
+      if (!uploaded) throw lastError || new Error('Video upload failed');
+    }
+  }
+
+  async function uploadStoryDirect(file, privacy, stickers, notice, dimensions = {}) {
+    const requestId = directRequestId();
+    const kind = inferComposerMediaKind(file);
+    const baseUrl = String(directUploadConfig.restUrl || '').replace(/\/+$/, '');
+    const created = await directJson(baseUrl, 'POST', {
+      filename: file.name || `story-${Date.now()}`,
+      mimeType: directMimeType(file, kind),
+      sizeBytes: file.size,
+      kind,
+      clientRequestId: requestId,
+      metadata: {
+        width: Math.max(0, Math.round(Number(dimensions.width || 0))),
+        height: Math.max(0, Math.round(Number(dimensions.height || 0))),
+      },
+    }, requestId);
+    const instruction = created?.upload;
+    const sessionId = created?.session?.id;
+    if (!instruction?.url || !sessionId) {
+      throw new Error('The media gateway returned an incomplete upload session');
+    }
+
+    const onProgress = (loaded, total) => {
+      const percent = total > 0 ? Math.max(1, Math.min(100, Math.round((loaded / total) * 100))) : 0;
+      notice.setPending(percent ? `Uploading story… ${percent}%` : 'Uploading story…');
+    };
+    try {
+      if (instruction.protocol === 'tus') {
+        await uploadTus(file, instruction, onProgress);
+      } else {
+        await xhrUpload(instruction.url, instruction.method || 'PUT', file, instruction.headers || {}, onProgress);
+      }
+
+      const completeUrl = `${baseUrl}/${encodeURIComponent(sessionId)}/complete`;
+      const completeBody = { privacy, stickers };
+      const maxAttempts = kind === 'video' ? 30 : 1;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        notice.setPending(kind === 'video' ? 'Preparing video…' : 'Creating story…');
+        try {
+          return await directJson(completeUrl, 'POST', completeBody);
+        } catch (error) {
+          if (kind !== 'video' || error?.status !== 409 || attempt === maxAttempts) {
+            throw error;
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        }
+      }
+      throw new Error('The Story video did not become playable in time');
+    } catch (error) {
+      directJson(`${baseUrl}/${encodeURIComponent(sessionId)}`, 'DELETE', null).catch(() => {});
+      throw error;
+    }
+  }
+
+  function ensureUploadNoticeRoot() {
+    let root = document.querySelector('.koopo-stories__upload-notices');
+    if (!root) {
+      root = el('div', { class: 'koopo-stories__upload-notices', 'aria-live': 'polite' });
+      document.body.appendChild(root);
+    }
+    return root;
+  }
+
+  function createUploadNotice(initialText) {
+    const root = ensureUploadNoticeRoot();
+    const notice = el('div', { class: 'koopo-stories__upload-notice is-pending' });
+    const iconWrap = el('div', { class: 'koopo-stories__upload-notice-icon' });
+    const spinner = el('div', { class: 'koopo-stories__spinner koopo-stories__spinner--sm' });
+    const check = el('div', { class: 'koopo-stories__upload-notice-check', html: '✓' });
+    const error = el('div', { class: 'koopo-stories__upload-notice-error', html: '!' });
+    const text = el('div', { class: 'koopo-stories__upload-notice-text' });
+    const dismissBtn = el('button', {
+      class: 'koopo-stories__upload-notice-dismiss',
+      type: 'button',
+      'aria-label': 'Dismiss upload notice',
+    });
+    dismissBtn.textContent = '×';
+
+    let removeTimer = 0;
+    const remove = () => {
+      if (removeTimer) {
+        clearTimeout(removeTimer);
+        removeTimer = 0;
+      }
+      if (notice.parentNode) {
+        notice.parentNode.removeChild(notice);
+      }
+      if (root.parentNode && root.children.length === 0) {
+        root.parentNode.removeChild(root);
+      }
+    };
+
+    const setState = (state, message) => {
+      notice.classList.remove('is-pending', 'is-success', 'is-error');
+      notice.classList.add(`is-${state}`);
+      if (message) {
+        text.textContent = message;
+      }
+      dismissBtn.hidden = state !== 'error';
+    };
+
+    iconWrap.appendChild(spinner);
+    iconWrap.appendChild(check);
+    iconWrap.appendChild(error);
+    text.textContent = initialText || 'Posting story...';
+    dismissBtn.hidden = true;
+    dismissBtn.addEventListener('click', remove);
+
+    notice.appendChild(iconWrap);
+    notice.appendChild(text);
+    notice.appendChild(dismissBtn);
+    root.appendChild(notice);
+
+    return {
+      setPending(message) {
+        setState('pending', message);
+      },
+      setSuccess(message) {
+        setState('success', message || 'Story posted');
+        if (removeTimer) {
+          clearTimeout(removeTimer);
+        }
+        removeTimer = window.setTimeout(remove, 2200);
+      },
+      setError(message) {
+        setState('error', message || 'Upload failed');
+      },
+      remove,
+    };
+  }
+
+  function formatFileSize(bytes) {
+    const size = Number(bytes || 0);
+    if (!Number.isFinite(size) || size <= 0) return '';
+    const mb = size / (1024 * 1024);
+    return `${Number.isInteger(mb) ? mb : mb.toFixed(1)} MB`;
+  }
+
+  function showFileTooLargeModal(file, maxBytes) {
+    const mediaKind = inferComposerMediaKind(file);
+    const mediaLabel = mediaKind === 'video' ? 'video' : 'file';
+    const maxLabel = formatFileSize(maxBytes);
+    const overlay = el('div', {
+      class: 'koopo-stories__composer koopo-stories__limit-modal',
+      role: 'dialog',
+      'aria-modal': 'true',
+      'aria-labelledby': 'koopo-stories-limit-title',
+      tabindex: '-1',
+    });
+    const panel = el('div', { class: 'koopo-stories__composer-panel koopo-stories__composer-panel--modal koopo-stories__limit-panel' });
+    const icon = el('div', { class: 'koopo-stories__limit-icon', 'aria-hidden': 'true' });
+    icon.textContent = '!';
+    const title = el('div', { class: 'koopo-stories__composer-title koopo-stories__limit-title', id: 'koopo-stories-limit-title' });
+    title.textContent = mediaKind === 'video' ? 'Video is too large' : 'File is too large';
+    const message = el('p', { class: 'koopo-stories__limit-message' });
+    message.textContent = `The maximum allowed story ${mediaLabel} size is ${maxLabel}. Choose a smaller ${mediaLabel} and try again.`;
+    const selectedSize = el('p', { class: 'koopo-stories__limit-selected' });
+    selectedSize.textContent = `Selected file: ${formatFileSize(file?.size)}`;
+    const actions = el('div', { class: 'koopo-stories__composer-actions koopo-stories__limit-actions' });
+    const closeBtn = el('button', { class: 'koopo-stories__composer-post', type: 'button' });
+    closeBtn.textContent = 'Choose another file';
+
+    const close = () => overlay.remove();
+    closeBtn.addEventListener('click', close);
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) close();
+    });
+    overlay.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') close();
+    });
+
+    panel.appendChild(icon);
+    panel.appendChild(title);
+    panel.appendChild(message);
+    panel.appendChild(selectedSize);
+    actions.appendChild(closeBtn);
+    panel.appendChild(actions);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+    overlay.focus();
+    closeBtn.focus();
+  }
+
+  function exceedsUploadLimit(file) {
+    const maxBytes = Number(
+      directUploadConfig.enabled === true
+        ? directUploadConfig.maxBytes
+        : window.KoopoStories?.maxUploadBytes
+    ) || 0;
+    return !!(file && maxBytes > 0 && Number(file.size || 0) > maxBytes);
+  }
+
+  function activeUploadLimit() {
+    return Number(
+      directUploadConfig.enabled === true
+        ? directUploadConfig.maxBytes
+        : window.KoopoStories?.maxUploadBytes
+    ) || 0;
+  }
 
   async function uploader() {
     const input = document.createElement('input');
@@ -24,6 +373,12 @@
         input.remove();
         return;
       }
+      if (exceedsUploadLimit(file)) {
+        showFileTooLargeModal(file, activeUploadLimit());
+        input.value = '';
+        input.remove();
+        return;
+      }
       openComposer(file);
       input.value = '';
       input.remove();
@@ -35,8 +390,36 @@
     input.click();
   }
 
+  function extensionFromValue(value) {
+    const raw = String(value || '').trim().split(/[?#]/)[0] || '';
+    const match = raw.match(/\.([a-z0-9]+)$/i);
+    return match ? match[1].toLowerCase() : '';
+  }
+
+  function inferComposerMediaKind(file, options = {}) {
+    const optionKind = String(options.mediaKind || options.kind || options.type || '').toLowerCase();
+    if (optionKind === 'video' || optionKind === 'image') return optionKind;
+
+    const mime = String((file && file.type) || options.mime || options.mimeType || '').toLowerCase();
+    if (mime.indexOf('video/') === 0) return 'video';
+    if (mime.indexOf('image/') === 0) return 'image';
+
+    const videoExts = ['mp4', 'mov', 'm4v', 'webm', '3gp', '3g2', 'avi', 'mkv'];
+    const imageExts = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif', 'avif'];
+    const ext = extensionFromValue((file && file.name) || options.url || options.src || '');
+    if (videoExts.indexOf(ext) !== -1) return 'video';
+    if (imageExts.indexOf(ext) !== -1) return 'image';
+
+    return 'image';
+  }
+
   function openComposer(file, options = {}) {
+    if (exceedsUploadLimit(file)) {
+      showFileTooLargeModal(file, activeUploadLimit());
+      return;
+    }
     let composerFile = file;
+    let composerMediaKind = inferComposerMediaKind(composerFile, options);
     // Simple preview + confirm composer (MVP+)
     const overlay = el('div', { class: 'koopo-stories__composer', role: 'dialog', 'aria-modal': 'true', tabindex: '-1' });
     const panel = el('div', { class: 'koopo-stories__composer-panel' });
@@ -61,7 +444,7 @@
     let url = URL.createObjectURL(composerFile);
 
     let mediaEl;
-    if ((composerFile.type || '').startsWith('video/')) {
+    if (composerMediaKind === 'video') {
       mediaEl = document.createElement('video');
       mediaEl.src = url;
       mediaEl.muted = true;
@@ -189,12 +572,13 @@
     stickerToolbar.appendChild(mentionBtn);
     stickerToolbar.appendChild(textBtn);
     stickerToolbar.appendChild(menuBtn);
-    if ((composerFile.type || '').startsWith('image/')) {
+    if (composerMediaKind === 'image') {
       const editBtn = makeCircleTool({ className: 'dashicons dashicons-admin-customizer' }, 'Edit Photo', async () => {
         const edited = await openImageEditorModal(composerFile);
         if (!edited) return;
         try { URL.revokeObjectURL(url); } catch (e) {}
         composerFile = edited;
+        composerMediaKind = inferComposerMediaKind(composerFile, { mediaKind: 'image' });
         url = URL.createObjectURL(composerFile);
         mediaEl.src = url;
         if (typeof scheduleSyncPreviewWrap === 'function') {
@@ -237,11 +621,13 @@
 
     const publicOption = el('option', { value: 'public' });
     publicOption.textContent = 'Public';
-    publicOption.selected = true;
+    publicOption.selected = defaultPrivacy === 'public';
     const friendsOption = el('option', { value: 'friends' });
     friendsOption.textContent = 'Friends Only';
+    friendsOption.selected = defaultPrivacy === 'friends';
     const closeFriendsOption = el('option', { value: 'close_friends' });
     closeFriendsOption.textContent = 'Close Friends';
+    closeFriendsOption.selected = defaultPrivacy === 'close_friends';
 
     privacySelect.appendChild(publicOption);
     privacySelect.appendChild(friendsOption);
@@ -253,11 +639,30 @@
     const shareActivityWrap = el('label', { class: 'koopo-stories__composer-privacy-label', style: 'display:flex;align-items:center;gap:8px;margin-top:10px;' });
     const shareActivityCheckbox = el('input', { type: 'checkbox' });
     const shareActivityText = el('span', { html: 'Also share to activity' });
+    const shareActivityHint = el('div', {
+      style: 'display:none;margin-top:6px;font-size:12px;line-height:1.4;opacity:0.8;'
+    });
     shareActivityWrap.appendChild(shareActivityCheckbox);
     shareActivityWrap.appendChild(shareActivityText);
     if (window.KoopoStories && window.KoopoStories.shareStoryToActivity) {
       privacyWrap.appendChild(shareActivityWrap);
+      privacyWrap.appendChild(shareActivityHint);
     }
+
+    const syncShareActivityState = () => {
+      if (!(window.KoopoStories && window.KoopoStories.shareStoryToActivity)) return;
+      const privacyValue = privacySelect.value || 'friends';
+      const canShareThisPrivacy = activitySharePrivacies.has(privacyValue);
+      shareActivityCheckbox.disabled = !canShareThisPrivacy;
+      shareActivityWrap.style.opacity = canShareThisPrivacy ? '1' : '0.6';
+      if (!canShareThisPrivacy) {
+        shareActivityCheckbox.checked = false;
+      }
+      shareActivityHint.textContent = canShareThisPrivacy ? '' : activityShareUnsupportedMessage;
+      shareActivityHint.style.display = canShareThisPrivacy ? 'none' : 'block';
+    };
+    privacySelect.addEventListener('change', syncShareActivityState);
+    syncShareActivityState();
 
     const actions = el('div', { class: 'koopo-stories__composer-actions' });
     const cancelBtn = el('button', { class: 'koopo-stories__composer-cancel', type: 'button' });
@@ -272,6 +677,7 @@
 
     function close() {
       try { URL.revokeObjectURL(url); } catch (e) { }
+      window.removeEventListener('resize', syncPreviewWrapSize);
       overlay.remove();
     }
 
@@ -300,53 +706,75 @@
       }
     });
 
+    let isPosting = false;
     postBtn.addEventListener('click', async () => {
+      if (isPosting) return;
+      isPosting = true;
+
       cancelBtn.disabled = true;
       postBtn.disabled = true;
-      status.textContent = 'Uploading...';
+      status.textContent = 'Posting in background...';
 
-      // Show loading overlay
-      loadingText.textContent = 'Uploading your story...';
-      loadingOverlay.classList.add('is-active');
+      const fileToUpload = composerFile;
+      const privacyValue = privacySelect.value;
+      const shareToActivity = !!(
+        window.KoopoStories &&
+        window.KoopoStories.shareStoryToActivity &&
+        shareActivityCheckbox.checked &&
+        activitySharePrivacies.has(privacyValue)
+      );
+      const stickersToSubmit = pendingStickers.map((sticker) => ({
+        type: sticker.type,
+        data: sticker.data,
+        position: {
+          x: Number(sticker?.position?.x ?? 50),
+          y: Number(sticker?.position?.y ?? 50),
+        },
+      }));
+      const mediaDimensions = {
+        width: composerMediaKind === 'video' ? mediaEl.videoWidth : mediaEl.naturalWidth,
+        height: composerMediaKind === 'video' ? mediaEl.videoHeight : mediaEl.naturalHeight,
+      };
 
-      const fd = new FormData();
-      fd.append('file', composerFile);
-      fd.append('privacy', privacySelect.value);
+      const notice = createUploadNotice('Posting story...');
+      close();
 
       try {
-        const response = await apiPost(`${API_BASE}`, fd);
+        let response;
+        const directEnabled = directUploadConfig.enabled === true && directUploadConfig.restUrl;
+        if (directEnabled) {
+          response = await uploadStoryDirect(fileToUpload, privacyValue, stickersToSubmit, notice, mediaDimensions);
+        } else {
+          const fd = new FormData();
+          fd.append('file', fileToUpload);
+          fd.append('privacy', privacyValue);
+          response = await apiPost(`${API_BASE}`, fd);
+        }
 
-        // If stickers were added, attach them to the story
-        if (pendingStickers.length > 0 && response.story_id && response.item_id) {
-          status.textContent = 'Adding stickers...';
-          loadingText.textContent = 'Adding stickers...';
-
-          for (const sticker of pendingStickers) {
+        if (!directEnabled && stickersToSubmit.length > 0 && response.story_id && response.item_id) {
+          notice.setPending('Adding stickers...');
+          for (const sticker of stickersToSubmit) {
             try {
-              // Send as JSON payload instead of FormData
               const stickerPayload = {
                 type: sticker.type,
                 data: sticker.data,
                 position_x: sticker.position.x,
                 position_y: sticker.position.y,
               };
-
               await apiPost(`${API_BASE}/${response.story_id}/items/${response.item_id}/stickers`, stickerPayload);
             } catch (stickerErr) {
               console.error('Failed to add sticker:', stickerErr);
-              // Continue with other stickers even if one fails
             }
           }
         }
 
-        if (window.KoopoStories && window.KoopoStories.shareStoryToActivity && shareActivityCheckbox.checked && response.story_id) {
-          status.textContent = 'Sharing to activity...';
-          loadingText.textContent = 'Sharing to activity...';
+        let shareError = '';
+        if (shareToActivity && response.story_id) {
+          notice.setPending('Sharing to activity...');
           try {
             const form = new FormData();
             form.append('action', 'koopo_stories_share_story_activity');
             form.append('story_id', String(response.story_id));
-            // Send the newly created item_id to ensure correct item is used
             if (response.item_id) {
               form.append('item_id', String(response.item_id));
             }
@@ -358,21 +786,20 @@
             }
           } catch (e) {
             console.error('Failed to share to activity:', e);
-            status.textContent = e.message || 'Share to activity failed';
+            shareError = e.message || 'Share to activity failed';
           }
         }
 
-        status.textContent = 'Posted!';
-        loadingText.textContent = 'Story posted!';
-        loadingOverlay.classList.add('is-success');
-        // Refresh all trays/widgets on page
         document.querySelectorAll('.koopo-stories').forEach(c => refreshTray(c));
-        setTimeout(close, 1200);
+        if (shareError) {
+          notice.setError(`Story posted. ${shareError}`);
+        } else {
+          notice.setSuccess('Story posted');
+        }
       } catch (e) {
-        status.textContent = e.message || 'Upload failed';
-        loadingOverlay.classList.remove('is-active');
-        cancelBtn.disabled = false;
-        postBtn.disabled = false;
+        notice.setError(e.message || 'Upload failed');
+      } finally {
+        isPosting = false;
       }
     });
 
@@ -837,6 +1264,32 @@
     });
   }
 
+  function createPollPreviewCard(pollData = {}) {
+    const card = el('div', {
+      class: 'koopo-stories__poll-card koopo-stories__poll-card--preview',
+    });
+    const header = el('div', { class: 'koopo-stories__poll-card-header' });
+    const question = el('div', { class: 'koopo-stories__poll-card-question' });
+    question.textContent = (pollData.question || '').trim() || 'Ask a question...';
+    header.appendChild(question);
+
+    const body = el('div', { class: 'koopo-stories__poll-card-body' });
+    const options = Array.isArray(pollData.options) ? pollData.options : [];
+    options.forEach((option) => {
+      const optionEl = el('div', {
+        class: 'koopo-stories__poll-card-option koopo-stories__poll-card-option--static',
+      });
+      const text = el('span', { class: 'koopo-stories__poll-card-option-text' });
+      text.textContent = option && option.text ? option.text : '';
+      optionEl.appendChild(text);
+      body.appendChild(optionEl);
+    });
+
+    card.appendChild(header);
+    card.appendChild(body);
+    return card;
+  }
+
   // Open modal to add a sticker
   function openStickerModal(type, pendingStickers, preview, assignStickerCid, options = {}) {
     const existingSticker = options.existingSticker || null;
@@ -852,7 +1305,7 @@
     });
 
     const modalTitle = el('div', { class: 'koopo-stories__composer-title' });
-      modalTitle.textContent = `${existingSticker ? 'Edit' : 'Add'} ${type.charAt(0).toUpperCase() + type.slice(1)}`;
+    modalTitle.textContent = `${existingSticker ? 'Edit' : 'Add'} ${type.charAt(0).toUpperCase() + type.slice(1)}`;
 
     const form = el('div', { class: 'koopo-stories__composer-form' });
 
@@ -978,58 +1431,94 @@
         };
       };
     } else if (type === 'poll') {
+      modalPanel.classList.add('koopo-stories__composer-panel--poll-editor');
+      form.classList.add('koopo-stories__composer-form--poll');
+      modalTitle.style.display = 'none';
+
+      const maxOptions = 6;
+      const existingOptions = Array.isArray(initialData.options)
+        ? initialData.options
+            .map((option) => (option && typeof option.text === 'string' ? option.text.trim() : ''))
+            .filter(Boolean)
+        : [];
+      const initialOptions = existingOptions.length ? existingOptions : ['Yes', 'No'];
+
+      const pollCard = el('div', { class: 'koopo-stories__poll-editor-card' });
+      const header = el('div', { class: 'koopo-stories__poll-card-header' });
       const questionInput = el('input', {
         type: 'text',
-        placeholder: 'Poll question',
-        style: 'width:100%;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:10px;'
-      });
-
-      const option1 = el('input', {
-        type: 'text',
-        placeholder: 'Option 1',
-        style: 'width:100%;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:10px;'
-      });
-
-      const option2 = el('input', {
-        type: 'text',
-        placeholder: 'Option 2',
-        style: 'width:100%;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:10px;'
-      });
-
-      const option3 = el('input', {
-        type: 'text',
-        placeholder: 'Option 3 (optional)',
-        style: 'width:100%;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:10px;'
-      });
-
-      const option4 = el('input', {
-        type: 'text',
-        placeholder: 'Option 4 (optional)',
-        style: 'width:100%;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:10px;'
+        placeholder: 'ASK A QUESTION...',
+        class: 'koopo-stories__poll-editor-question',
       });
       questionInput.value = initialData.question || '';
-      if (initialData.options && Array.isArray(initialData.options)) {
-        option1.value = initialData.options[0]?.text || '';
-        option2.value = initialData.options[1]?.text || '';
-        option3.value = initialData.options[2]?.text || '';
-        option4.value = initialData.options[3]?.text || '';
-      }
+      header.appendChild(questionInput);
 
-      form.appendChild(questionInput);
-      form.appendChild(option1);
-      form.appendChild(option2);
-      form.appendChild(option3);
-      form.appendChild(option4);
+      const optionsWrap = el('div', { class: 'koopo-stories__poll-card-body koopo-stories__poll-editor-options' });
+      const addOptionBtn = el('button', {
+        type: 'button',
+        class: 'koopo-stories__poll-editor-add',
+      });
+      addOptionBtn.textContent = 'Add another option...';
+
+      const optionInputs = [];
+      const syncAddOptionState = () => {
+        const limitReached = optionInputs.length >= maxOptions;
+        addOptionBtn.hidden = limitReached;
+        addOptionBtn.disabled = limitReached;
+      };
+
+      const createOptionInput = (value = '') => {
+        if (optionInputs.length >= maxOptions) return null;
+        const row = el('div', { class: 'koopo-stories__poll-editor-option' });
+        const input = el('input', {
+          type: 'text',
+          placeholder: optionInputs.length < 2 ? `Option ${optionInputs.length + 1}` : 'Type another option...',
+          class: 'koopo-stories__poll-editor-option-input',
+        });
+        input.value = value;
+        row.appendChild(input);
+
+        if (addOptionBtn.parentNode === optionsWrap) {
+          optionsWrap.insertBefore(row, addOptionBtn);
+        } else {
+          optionsWrap.appendChild(row);
+        }
+        optionInputs.push(input);
+        syncAddOptionState();
+        return input;
+      };
+
+      initialOptions.slice(0, maxOptions).forEach((value) => createOptionInput(value));
+      optionsWrap.appendChild(addOptionBtn);
+      syncAddOptionState();
+
+      addOptionBtn.onclick = () => {
+        const input = createOptionInput('');
+        if (input) {
+          input.focus();
+        }
+      };
+
+      pollCard.appendChild(header);
+      pollCard.appendChild(optionsWrap);
+      form.appendChild(pollCard);
 
       stickerData.getData = () => {
+        const options = optionInputs.reduce((acc, input, idx) => {
+          const text = input.value.trim();
+          if (!text) return acc;
+          acc.push({
+            text,
+            votes: Array.isArray(initialData.options) && initialData.options[idx]
+              ? Number(initialData.options[idx].votes || 0)
+              : 0,
+          });
+          return acc;
+        }, []);
+
         return {
           question: questionInput.value.trim(),
-          options: [
-            { text: option1.value.trim(), votes: 0 },
-            { text: option2.value.trim(), votes: 0 },
-            option3.value.trim() ? { text: option3.value.trim(), votes: 0 } : null,
-            option4.value.trim() ? { text: option4.value.trim(), votes: 0 } : null,
-          ].filter(Boolean)
+          options,
         };
       };
     } else if (type === 'text') {
@@ -1143,6 +1632,9 @@
     cancelBtn.textContent = 'Cancel';
     const addBtn = el('button', { class: 'koopo-stories__composer-post', type: 'button' });
     addBtn.textContent = existingSticker ? 'Save Sticker' : 'Add Sticker';
+    if (type === 'poll') {
+      addBtn.textContent = 'Done';
+    }
 
     const closeModal = () => {
       modalOverlay.remove();
@@ -1603,25 +2095,7 @@
         break;
 
       case 'poll':
-        content = el('div', {
-          class: 'koopo-stories__sticker-poll',
-          style: 'background:rgba(255,255,255,0.95);color:#000;padding:16px;border-radius:16px;min-width:250px;max-width:300px;box-shadow:0 4px 12px rgba(0,0,0,0.3);'
-        });
-        const pollQuestion = el('div', { style: 'font-weight:600;font-size:15px;margin-bottom:12px;' });
-        pollQuestion.textContent = sticker.data.question;
-        content.appendChild(pollQuestion);
-
-        if (sticker.data.options && Array.isArray(sticker.data.options)) {
-          sticker.data.options.forEach((option) => {
-            const optionEl = el('div', {
-              style: 'background:#f0f0f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;'
-            });
-            const optionText = el('span', { style: 'font-size:14px;font-weight:500;' });
-            optionText.textContent = option.text;
-            optionEl.appendChild(optionText);
-            content.appendChild(optionEl);
-          });
-        }
+        content = createPollPreviewCard(sticker.data || {});
         break;
       case 'text':
         content = el('div', {

@@ -54,7 +54,7 @@ public static function ensure_defaults( int $post_id, $post, bool $update ) : vo
 
     $privacy = get_post_meta($post_id, 'privacy', true);
     if ( ! $privacy ) {
-        update_post_meta($post_id, 'privacy', 'friends');
+        update_post_meta($post_id, 'privacy', Koopo_Stories_Utils::get_default_privacy());
     }
 }
 

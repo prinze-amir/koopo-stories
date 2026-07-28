@@ -7,8 +7,22 @@ final class Koopo_Stories_Utils {
     private static $avatar_cache = [];
     private static $profile_url_cache = [];
 
+    public static function can_user_post_story( int $user_id ) : bool {
+        if ( $user_id <= 0 ) {
+            return false;
+        }
+
+        if ( get_option( Koopo_Stories_Module::OPTION_ENABLE, '1' ) !== '1' ) {
+            return false;
+        }
+
+        $allowed = apply_filters( 'koopo_stories_user_can_upload', true, $user_id );
+        return (bool) $allowed;
+    }
+
     public static function ensure_can_upload() {
-        if ( ! current_user_can('upload_files') ) {
+        $user_id = get_current_user_id();
+        if ( ! self::can_user_post_story( $user_id ) ) {
             return new WP_REST_Response([ 'error' => 'forbidden', 'message' => 'upload_not_allowed' ], 403);
         }
 
@@ -27,7 +41,11 @@ final class Koopo_Stories_Utils {
             'post_status' => 'any',
             'author' => $user_id,
             'fields' => 'ids',
-            'posts_per_page' => -1,
+            'posts_per_page' => $max_per_day,
+            'no_found_rows' => true,
+            'update_post_meta_cache' => false,
+            'update_post_term_cache' => false,
+            'cache_results' => false,
             'date_query' => [
                 [
                     'after' => date('Y-m-d H:i:s', $today_start),
@@ -66,7 +84,11 @@ final class Koopo_Stories_Utils {
             'post_type' => Koopo_Stories_Module::CPT_ITEM,
             'post_status' => 'any',
             'fields' => 'ids',
-            'posts_per_page' => -1,
+            'posts_per_page' => $max_items_per_story,
+            'no_found_rows' => true,
+            'update_post_meta_cache' => false,
+            'update_post_term_cache' => false,
+            'cache_results' => false,
             'meta_query' => [
                 [
                     'key' => 'story_id',
@@ -86,7 +108,7 @@ final class Koopo_Stories_Utils {
         }
 
         if ( empty($_FILES['file']) || ! is_array($_FILES['file']) ) {
-            $max_upload = wp_max_upload_size();
+            $max_upload = self::get_max_upload_size_bytes();
             $content_len = (int) ( $_SERVER['CONTENT_LENGTH'] ?? 0 );
             $message = $content_len > 0
                 ? 'Upload exceeded server limits.'
@@ -103,10 +125,27 @@ final class Koopo_Stories_Utils {
         return [ 'file' => $_FILES['file'] ];
     }
 
-    public static function validate_upload_file( array $file ) {
+    public static function get_max_upload_size_bytes() : int {
+        $configured_max = self::get_direct_max_upload_size_bytes();
+        $server_max = (int) wp_max_upload_size();
+        return $server_max > 0 ? min($configured_max, $server_max) : $configured_max;
+    }
+
+    public static function get_direct_max_upload_size_bytes() : int {
         $max_mb = (int) get_option('koopo_stories_max_upload_size_mb', 50);
         if ( $max_mb < 1 ) $max_mb = 1;
-        $max_bytes = $max_mb * MB_IN_BYTES;
+
+        return $max_mb * MB_IN_BYTES;
+    }
+
+    public static function get_allowed_upload_mimes() : array {
+        $allowed_images = (array) get_option('koopo_stories_allowed_image_mimes', ['image/jpeg','image/png','image/webp','image/avif']);
+        $allowed_videos = (array) get_option('koopo_stories_allowed_video_mimes', ['video/mp4','video/webm']);
+        return array_values(array_unique(array_map('sanitize_mime_type', array_merge($allowed_images, $allowed_videos))));
+    }
+
+    public static function validate_upload_file( array $file ) {
+        $max_bytes = self::get_max_upload_size_bytes();
         $size = isset($file['size']) ? (int) $file['size'] : 0;
         if ( $size > 0 && $size > $max_bytes ) {
             return new WP_REST_Response([
@@ -116,9 +155,7 @@ final class Koopo_Stories_Utils {
             ], 400);
         }
 
-        $allowed_images = (array) get_option('koopo_stories_allowed_image_mimes', ['image/jpeg','image/png','image/webp','image/avif']);
-        $allowed_videos = (array) get_option('koopo_stories_allowed_video_mimes', ['video/mp4','video/webm']);
-        $allowed_mimes = array_values(array_unique(array_merge($allowed_images, $allowed_videos)));
+        $allowed_mimes = self::get_allowed_upload_mimes();
 
         require_once ABSPATH . 'wp-admin/includes/file.php';
         $filetype = wp_check_filetype_and_ext($file['tmp_name'], $file['name']);
@@ -140,6 +177,7 @@ final class Koopo_Stories_Utils {
         $payload = [
             'user_id' => $user_id,
             'scope' => $params['scope'] ?? '',
+            'only_me' => isset($params['only_me']) ? (int) $params['only_me'] : 0,
             'exclude_me' => isset($params['exclude_me']) ? (int) $params['exclude_me'] : 0,
             'order' => $params['order'] ?? '',
             'limit' => isset($params['limit']) ? (int) $params['limit'] : 0,
@@ -161,9 +199,11 @@ final class Koopo_Stories_Utils {
         }
 
         $payload = [
-            'id' => $author_id,
-            'name' => $name,
-            'avatar' => self::get_avatar_url_cached($author_id, $avatar_size),
+            'id'      => $author_id,
+            'user_id' => $author_id,
+            'userId'  => $author_id,
+            'name'    => $name,
+            'avatar'  => self::get_avatar_url_cached($author_id, $avatar_size),
         ];
 
         if ( $include_profile_url ) {
@@ -282,6 +322,12 @@ final class Koopo_Stories_Utils {
             'duration_ms' => $type === 'image' ? $duration : null,
         ];
 
+        if ( $type === 'video' && $attachment_id ) {
+            $payload['poster'] = esc_url_raw((string) get_post_meta($attachment_id, '_koopo_media_thumbnail_url', true));
+            $payload['hls_src'] = esc_url_raw((string) get_post_meta($attachment_id, '_koopo_media_final_delivery_url', true));
+            $payload['media_status'] = sanitize_key((string) get_post_meta($attachment_id, '_koopo_media_status', true));
+        }
+
         if ( ! $compact ) {
             $payload['thumb'] = $thumb;
         }
@@ -297,6 +343,11 @@ final class Koopo_Stories_Utils {
         $attachment_id = (int) get_post_meta($item_id, 'attachment_id', true);
         if ( ! $attachment_id ) {
             return '';
+        }
+
+        $remote_thumb = esc_url_raw((string) get_post_meta($attachment_id, '_koopo_media_thumbnail_url', true));
+        if ( $remote_thumb !== '' ) {
+            return $remote_thumb;
         }
 
         $thumb = wp_get_attachment_image_url($attachment_id, $size);
@@ -382,9 +433,29 @@ final class Koopo_Stories_Utils {
         return true;
     }
 
-    public static function normalize_privacy( $privacy ) : string {
-        if ( empty($privacy) ) return 'friends';
-        if ( $privacy === 'connections' ) return 'friends';
-        return $privacy;
+    public static function get_default_privacy() : string {
+        return self::normalize_privacy_value(get_option('koopo_stories_default_privacy', 'public'), 'public');
+    }
+
+    public static function normalize_privacy( $privacy, ?string $fallback = null ) : string {
+        $fallback = $fallback === null
+            ? self::get_default_privacy()
+            : self::normalize_privacy_value($fallback, 'friends');
+
+        return self::normalize_privacy_value($privacy, $fallback);
+    }
+
+    private static function normalize_privacy_value( $privacy, string $fallback ) : string {
+        $privacy = is_string($privacy) ? sanitize_key($privacy) : '';
+        if ( $privacy === 'connections' ) {
+            return 'friends';
+        }
+
+        $allowed = ['public', 'friends', 'close_friends'];
+        if ( in_array($privacy, $allowed, true) ) {
+            return $privacy;
+        }
+
+        return in_array($fallback, $allowed, true) ? $fallback : 'friends';
     }
 }

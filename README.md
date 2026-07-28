@@ -4,22 +4,21 @@ Here is the **official project roadmap** for the Stories feature, aligned to com
 
 ---
 
-## 📊 Current Status
+## 📊 Current Status (Verified March 1, 2026)
 
 | Phase | Status | Completion |
 |-------|--------|------------|
-| **Phase 0-8** | ✅ Complete | 100% |
-| **Phase 9-10** | ✅ Complete | 100% |
-| **Phase 11** | ✅ Complete | 100% |
-| **Phase 12** | ✅ Complete | 100% |
-| **Phase 13** | ✅ Complete | 100% |
-| **Phase 14-17** | 🔄 Planned | 0% |
+| **Phase 0-13** | ✅ Complete | 100% |
+| **Phase 14** | ✅ Mostly complete | 75% |
+| **Phase 15** | ✅ Mostly complete | 75% |
+| **Phase 16** | 🔄 In progress | 55% |
+| **Phase 17** | 🔄 In progress | 45% |
 
-**Overall Progress:** 76% (13/17 phases complete)
+**Overall Progress:** ~82% (core product complete, release hardening in progress)
 
-**Latest Commit:** 009 - Phase 11 Complete (Interactive Features)
+**Latest Verified Baseline:** local codebase audit on March 1, 2026
 
-**Next Up:** Phase 14 - Performance & Optimization
+**Next Up:** Final E2E QA on running WordPress/BuddyBoss, then Phase 16-17 hardening closure
 
 ---
 
@@ -133,8 +132,8 @@ Here is the **official project roadmap** for the Stories feature, aligned to com
 ### **Phase 9 – User Privacy & Granular Controls** ✅ **COMPLETE**
 
 36. Per-story privacy settings (public, friends only, close friends) ✅
-37. Story archive (save stories beyond 24h for logged-in user) ⏸️ Deferred
-38. Hide story from specific users ⏸️ Deferred
+37. Story archive (save stories beyond 24h for logged-in user) ✅
+38. Hide story from specific users ✅
 39. Close friends list integration ✅
 
 👉 **Commit:** 005
@@ -243,49 +242,55 @@ Here is the **official project roadmap** for the Stories feature, aligned to com
 
 ---
 
-### **Phase 14 – Performance**
+### **Phase 14 – Performance** ✅ **MOSTLY COMPLETE**
 
-56. Caching (transients for feeds)
-57. Query optimization
-58. Lazy loading for media
-59. CDN integration for attachments
+56. Caching (transients for feeds) ✅  
+57. Query optimization ✅  
+58. Lazy loading for media ✅  
+59. CDN integration for attachments ⏸️ (infra/environment dependent)
 
-👉 **Commit:** 032
-
----
-
-### **Phase 15 – React Native Readiness**
-
-60. Auth abstraction
-61. Mobile-friendly payloads
-62. API versioning
-63. Push notification hooks
-
-👉 **Commit:** 033
+**Status notes:**
+- Feed and archive use transient caching.
+- Feed query path uses preloaded item IDs and batched unseen lookups.
+- Frontend tray/archive thumbnails use lazy loading.
 
 ---
 
-### **Phase 16 – Final Polish**
+### **Phase 15 – React Native Readiness** ✅ **MOSTLY COMPLETE**
 
-64. Accessibility (ARIA labels, keyboard nav)
-65. Animations & transitions
-66. Edge cases & error handling
-67. Internationalization (i18n)
+60. Auth abstraction 🔄 (WordPress session/nonce model in place; app token abstraction not formalized here)  
+61. Mobile-friendly payloads ✅  
+62. API versioning ✅  
+63. Push notification hooks ✅
 
-👉 **Commit:** 034
+**Status notes:**
+- `compact=1` / `mobile=1` response shaping is implemented for feed/story/archive.
+- `api_version` is included in API responses.
+- Story/reaction/reply hooks are exposed for integrations.
 
 ---
 
-### **Phase 17 – Hardening & Release**
+### **Phase 16 – Final Polish** 🔄 **IN PROGRESS**
 
-68. Security review
-69. Back-compat testing
-70. Release notes
-71. Documentation
+64. Accessibility (ARIA labels, keyboard nav) 🔄  
+65. Animations & transitions ✅  
+66. Edge cases & error handling 🔄  
+67. Internationalization (i18n) 🔄
 
-👉 **Commit:** 035 (v1.0)
+**Status notes:**
+- Core UX animations and transitions are present.
+- Accessibility and i18n coverage exist but are not fully comprehensive across all interaction paths.
 
-**Progress:** Security review ✅, Back-compat testing 🔄, Release notes ✅, Documentation ✅
+---
+
+### **Phase 17 – Hardening & Release** 🔄 **IN PROGRESS**
+
+68. Security review 🔄  
+69. Back-compat testing 🔄  
+70. Release notes ✅  
+71. Documentation 🔄
+
+**Progress:** release notes are present, but QA/back-compat closure and doc synchronization are still pending.
 
 ---
 
@@ -313,6 +318,8 @@ Here is the **official project roadmap** for the Stories feature, aligned to com
   - Feed: `/wp-json/koopo/v1/stories`
   - Story: `/wp-json/koopo/v1/stories/{id}`
   - Archive: `/wp-json/koopo/v1/stories/archive`
+  - Add sticker: `POST /wp-json/koopo/v1/stories/{story_id}/items/{item_id}/stickers`
+  - Sticker providers config (mobile/web): `GET /wp-json/koopo/v1/stories/stickers/providers`
   - `compact=1` for mobile payloads
 - Admin tools:
   - Back-compat tools in Stories Settings (privacy migration + orphan cleanup).
@@ -385,8 +392,8 @@ Phase 0 complete, moving to Phase 9
 | **Privacy** |
 | Public/Friends toggle | ✅ | ✅ | ✅ Complete |
 | Close friends list | ✅ | ✅ | ✅ Complete |
-| Hide from specific users | ✅ | ✅ | ⏸️ complete |
-| Story archive | ✅ | ✅ | ⏸️ Deferred |
+| Hide from specific users | ✅ | ✅ | ✅ Complete |
+| Story archive | ✅ | ✅ | ✅ Complete (owner archive + archive endpoint) |
 | **Engagement** |
 | Reactions/Likes | ✅ | ✅ | ✅ Complete |
 | DM replies | ✅ | ✅ | ✅ Complete |
@@ -399,35 +406,28 @@ Phase 0 complete, moving to Phase 9
 | Polls | ✅ | ✅ | ✅ Complete|
 | **Platform** |
 | Web support | ✅ | ✅ | ✅ Complete |
-| Mobile app API | ✅ | ✅ | 🔄 Phase 15 |
-| Push notifications | ✅ | ✅ | 🔄 Phase 15 |
+| Mobile app API | ✅ | ✅ | 🔄 Mostly ready (final contract QA pending) |
+| Push notifications | ✅ | ✅ | ✅ Hooks available |
 
 ---
 
 ## 🎯 Development Priorities
 
-### **Immediate (Next 2 weeks)**
-1. **Phase 9:** Privacy controls (essential for user trust) fix public option
-2. **Phase 10:** Reactions & replies (drives engagement)
+### **Immediate (Current Sprint)**
+1. Run full browser + API E2E validation once the local WordPress/BuddyBoss stack is running.
+2. Validate mobile-app posting contract against stories feed/detail/seen paths.
+3. Regression-test story-to-activity media quality (image and video cards).
 
-### **Short-term (1 month)**
-3. **Phase 12:** Analytics/insights (user value)
-4. **Phase 13:** Moderation tools (platform safety)
-
-### **Medium-term (2-3 months)**
-5. **Phase 11:** Interactive stickers
-6. **Phase 14:** Performance optimization
-7. **Phase 15:** Mobile API readiness
-
-### **Long-term (3+ months)**
-8. **Phase 16:** Polish & accessibility
-9. **Phase 17:** Security audit & v1.0 release
+### **Short-term**
+4. Finish Phase 16 accessibility and i18n coverage.
+5. Complete Phase 17 back-compat and security closure checklist.
+6. Finalize release documentation to match verified implementation state.
 
 ---
 
 ## 📝 Notes
 
-- Privacy features (Phase 9) are **critical** before public launch
+- As of March 1, 2026, core user-facing product goals are functionally complete; remaining work is concentrated in hardening, QA depth, and release consistency.
 - Engagement features (Phase 10) should come before analytics
 - Performance optimization (Phase 14) can run parallel with feature development
 - All phases maintain backward compatibility with existing stories
@@ -441,6 +441,12 @@ Phase 0 complete, moving to Phase 9
   - Feed: omits `author.profile_url`.
   - Story detail: omits `author.profile_url`, `analytics.reactions`, and item `thumb`.
   - Archive: omits `author.profile_url`.
+- Stickers API (mobile-ready):
+  - Add sticker: `POST /wp-json/koopo/v1/stories/{story_id}/items/{item_id}/stickers`
+  - Delete sticker: `DELETE /wp-json/koopo/v1/stickers/{sticker_id}`
+  - Poll vote: `POST /wp-json/koopo/v1/stickers/{sticker_id}/vote`
+  - Providers config: `GET /wp-json/koopo/v1/stories/stickers/providers`
+  - Accepted sticker `type` values for add endpoint include `mention`, `link`, `location`, `poll`, `text`, `media`, plus mobile aliases `gif`, `giphy`, `tenor`, `lottie` (aliased to `media`).
 - Push notification hooks (for external integrations):
   - `koopo_stories_story_created` (story_id, item_id, user_id)
   - `koopo_stories_reaction_added` (story_id, user_id, reaction, item_id)

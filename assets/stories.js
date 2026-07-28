@@ -7,6 +7,8 @@
   const t = (key, fallback) => (i18n && i18n[key]) ? i18n[key] : fallback;
   const isMobile = (window.matchMedia && window.matchMedia('(max-width: 768px)').matches)
     || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+  let archiveObserver = null;
+  let archiveFallbackBound = false;
 
   function withCompact(url) {
     if (!isMobile) return url;
@@ -28,6 +30,19 @@
   const headers = () => ({
     'X-WP-Nonce': NONCE,
   });
+
+  function decodeStoryText(value) {
+    const textarea = document.createElement('textarea');
+    let decoded = String(value || '').replace(/&;amp;?/gi, '&amp;');
+    // Some saved display names have been encoded more than once.
+    for (let i = 0; i < 2 && /&(?:#\d+|#x[\da-f]+|[a-z]+);/i.test(decoded); i += 1) {
+      textarea.innerHTML = decoded;
+      const next = textarea.value;
+      if (next === decoded) break;
+      decoded = next;
+    }
+    return decoded;
+  }
 
   async function apiGet(url) {
     const res = await fetch(withCompact(url), { credentials: 'same-origin', headers: headers() });
@@ -139,6 +154,46 @@
       container.appendChild(content);
     }
     return content;
+  }
+
+  function getArchiveSentinel(container) {
+    let sentinel = container.querySelector('.koopo-stories__archive-sentinel');
+    if (!sentinel) {
+      sentinel = el('div', {
+        class: 'koopo-stories__archive-sentinel',
+        'aria-hidden': 'true',
+      });
+      sentinel.style.cssText = 'display:block;width:100%;height:1px;';
+      container.appendChild(sentinel);
+    }
+    return sentinel;
+  }
+
+  function loadNextArchivePage(container) {
+    if (!container || container.getAttribute('data-archive') !== '1') return;
+    const isLoading = container.dataset.archiveLoading === '1';
+    const hasMore = container.dataset.archiveHasMore !== '0';
+    if (isLoading || !hasMore) return;
+
+    const nextPage = parseInt(container.dataset.archivePage || '1', 10) + 1;
+    container.dataset.archiveLoading = '1';
+    syncArchiveInfiniteState(container);
+    loadArchiveTray(container, { append: true, page: nextPage });
+  }
+
+  function syncArchiveInfiniteState(container) {
+    if (!container || container.getAttribute('data-archive') !== '1') return;
+    const sentinel = getArchiveSentinel(container);
+    const isLoading = container.dataset.archiveLoading === '1';
+    const hasMore = container.dataset.archiveHasMore !== '0';
+
+    sentinel.hidden = !hasMore;
+    if (archiveObserver) {
+      archiveObserver.unobserve(sentinel);
+      if (hasMore && !isLoading) {
+        archiveObserver.observe(sentinel);
+      }
+    }
   }
 
   function showToast(message) {
@@ -291,6 +346,9 @@
     const allStoriesInTray = listOverride || container?._storiesList || [];
     const clickedStoryData = allStoriesInTray.find(st => String(st.story_id) === String(storyId));
     const clickedIndex = allStoriesInTray.findIndex(st => String(st.story_id) === String(storyId));
+    const startUnseenItemId = (clickedStoryData && clickedStoryData.has_unseen && clickedStoryData.first_unseen_item_id)
+      ? clickedStoryData.first_unseen_item_id
+      : null;
     const viewer = await ensureViewer();
 
     if (clickedStoryData && clickedStoryData.story_ids && clickedStoryData.story_ids.length > 1) {
@@ -333,7 +391,13 @@
         if (!combinedStory.items || combinedStory.items.length === 0) {
           throw new Error('Story content unavailable.');
         }
-        viewer.open(combinedStory, allStoriesInTray, clickedIndex >= 0 ? clickedIndex : 0);
+        viewer.open(
+          combinedStory,
+          allStoriesInTray,
+          clickedIndex >= 0 ? clickedIndex : 0,
+          false,
+          startUnseenItemId || null
+        );
         prefetchAdjacentStories(allStoriesInTray, clickedIndex);
         return true;
       } catch (err) {
@@ -347,7 +411,13 @@
       if (!story.items || story.items.length === 0) {
         throw new Error('Story content unavailable.');
       }
-      viewer.open(story, allStoriesInTray, clickedIndex >= 0 ? clickedIndex : 0);
+      viewer.open(
+        story,
+        allStoriesInTray,
+        clickedIndex >= 0 ? clickedIndex : 0,
+        false,
+        startUnseenItemId || null
+      );
       prefetchAdjacentStories(allStoriesInTray, clickedIndex);
       return true;
     } catch (err) {
@@ -407,6 +477,7 @@
       container.dataset.archivePage = '1';
       container.dataset.archiveHasMore = '1';
       container.dataset.archiveLoading = '1';
+      syncArchiveInfiniteState(container);
       return loadArchiveTray(container, { page: 1 }).catch(() => { });
     }
     return loadTray(container).catch(() => { });
@@ -478,6 +549,7 @@
         container.dataset.archiveHasMore = '0';
         container.dataset.archiveLoading = '0';
         container.dataset.archivePage = '1';
+        syncArchiveInfiniteState(container);
         setLoading(container, false);
         return;
       }
@@ -496,6 +568,7 @@
 
       container.dataset.archiveHasMore = hasMore ? '1' : '0';
       container.dataset.archivePage = String(page);
+      syncArchiveInfiniteState(container);
       if (!append) waitForContent(container, loadToken);
     } catch (err) {
       console.error('Failed to load archived stories:', err);
@@ -505,6 +578,7 @@
       }
     } finally {
       container.dataset.archiveLoading = '0';
+      syncArchiveInfiniteState(container);
       if (!append) waitForContent(container, loadToken);
     }
   }
@@ -606,7 +680,7 @@
     avatar.appendChild(img);
 
     const name = el('div', { class: 'koopo-stories__name' });
-    name.textContent = isUploader ? 'Your Story' : (s.author?.name || 'Story');
+    name.textContent = isUploader ? 'Your Story' : decodeStoryText(s.author?.name || 'Story');
 
     // Show badge with unseen count if enabled
     if (!isUploader && showUnseenBadge && (s.unseen_count || 0) > 0) {
@@ -772,24 +846,44 @@
   }
 
   function initArchiveInfiniteScroll() {
-    const onScroll = () => {
-      const archives = document.querySelectorAll('.koopo-stories[data-archive="1"]');
-      archives.forEach(container => {
-        const isLoading = container.dataset.archiveLoading === '1';
-        const hasMore = container.dataset.archiveHasMore !== '0';
-        if (isLoading || !hasMore) return;
+    const archives = document.querySelectorAll('.koopo-stories[data-archive="1"]');
+    if (archives.length === 0) return;
 
+    if ('IntersectionObserver' in window) {
+      if (!archiveObserver) {
+        archiveObserver = new IntersectionObserver((entries) => {
+          entries.forEach(entry => {
+            if (!entry.isIntersecting) return;
+            const container = entry.target.closest('.koopo-stories[data-archive="1"]');
+            if (!container) return;
+            loadNextArchivePage(container);
+          });
+        }, {
+          root: null,
+          rootMargin: '300px 0px',
+          threshold: 0,
+        });
+      }
+
+      archives.forEach(container => syncArchiveInfiniteState(container));
+      return;
+    }
+
+    if (archiveFallbackBound) return;
+    const onScroll = () => {
+      const nodes = document.querySelectorAll('.koopo-stories[data-archive="1"]');
+      nodes.forEach(container => {
         const rect = container.getBoundingClientRect();
         const nearBottom = rect.bottom - window.innerHeight < 200;
         if (!nearBottom) return;
-
-        const nextPage = parseInt(container.dataset.archivePage || '1', 10) + 1;
-        container.dataset.archiveLoading = '1';
-        loadArchiveTray(container, { append: true, page: nextPage });
+        loadNextArchivePage(container);
       });
     };
 
+    archiveFallbackBound = true;
     window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll, { passive: true });
+    onScroll();
   }
 
   window.KoopoStoriesUI = {

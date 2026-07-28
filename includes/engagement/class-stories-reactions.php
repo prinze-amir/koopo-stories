@@ -38,14 +38,14 @@ class Koopo_Stories_Reactions {
     /**
      * Add or update a reaction
      */
-    public static function add_reaction( int $story_id, int $user_id, string $reaction, int $item_id = null ) : bool {
+    public static function add_reaction( int $story_id, int $user_id, string $reaction, ?int $item_id = null ) : bool {
         global $wpdb;
         $table = $wpdb->prefix . self::TABLE_NAME;
 
         // Validate reaction (emoji or simple string)
         $allowed_reactions = [
             '❤️', '😂', '😮', '😢', '👏', '🔥', '💩', '🤦🏽‍♂️', '👿',
-            '🤯', '😘', '😡', '🥰', '😳', '🥶', 'like',
+            '🤯', '😘', '😡', '🥰', '😳', '🥶', '😍', '🎉', '👍', 'like',
         ];
         $allowed_reactions = apply_filters('koopo_stories_allowed_reactions', $allowed_reactions);
         if ( ! in_array($reaction, $allowed_reactions, true) ) {
@@ -70,7 +70,7 @@ class Koopo_Stories_Reactions {
     /**
      * Remove a reaction
      */
-    public static function remove_reaction( int $story_id, int $user_id, int $item_id = null ) : bool {
+    public static function remove_reaction( int $story_id, int $user_id, ?int $item_id = null ) : bool {
         global $wpdb;
         $table = $wpdb->prefix . self::TABLE_NAME;
 
@@ -101,7 +101,7 @@ class Koopo_Stories_Reactions {
     /**
      * Get reactions for a story
      */
-    public static function get_reactions( int $story_id, int $item_id = null ) : array {
+    public static function get_reactions( int $story_id, ?int $item_id = null ) : array {
         global $wpdb;
         $table = $wpdb->prefix . self::TABLE_NAME;
 
@@ -124,7 +124,7 @@ class Koopo_Stories_Reactions {
     /**
      * Get reaction counts grouped by reaction type
      */
-    public static function get_reaction_counts( int $story_id, int $item_id = null ) : array {
+    public static function get_reaction_counts( int $story_id, ?int $item_id = null ) : array {
         global $wpdb;
         $table = $wpdb->prefix . self::TABLE_NAME;
 
@@ -186,7 +186,7 @@ class Koopo_Stories_Reactions {
     /**
      * Get user's reaction on a story
      */
-    public static function get_user_reaction( int $story_id, int $user_id, int $item_id = null ) : ?string {
+    public static function get_user_reaction( int $story_id, int $user_id, ?int $item_id = null ) : ?string {
         global $wpdb;
         $table = $wpdb->prefix . self::TABLE_NAME;
 
@@ -211,7 +211,7 @@ class Koopo_Stories_Reactions {
     /**
      * Get reactions for multiple users on a story (map of user_id => reaction)
      */
-    public static function get_reactions_map( int $story_id, array $user_ids, int $item_id = null ) : array {
+    public static function get_reactions_map( int $story_id, array $user_ids, ?int $item_id = null ) : array {
         global $wpdb;
         $table = $wpdb->prefix . self::TABLE_NAME;
 
@@ -255,7 +255,7 @@ class Koopo_Stories_Reactions {
     /**
      * Get total reaction count for a story
      */
-    public static function get_total_count( int $story_id, int $item_id = null ) : int {
+    public static function get_total_count( int $story_id, ?int $item_id = null ) : int {
         global $wpdb;
         $table = $wpdb->prefix . self::TABLE_NAME;
 

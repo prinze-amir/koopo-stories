@@ -61,9 +61,43 @@ class Koopo_Stories_Cleanup {
         }
 
         foreach ($items as $item_id) {
-            wp_delete_post((int)$item_id, true);
+            self::delete_story_item($story_id, (int) $item_id);
         }
 
         wp_delete_post($story_id, true);
+    }
+
+    public static function delete_story_item( int $story_id, int $item_id ) : bool {
+        $item = get_post($item_id);
+        if ( ! $item || $item->post_type !== Koopo_Stories_Module::CPT_ITEM ) {
+            return false;
+        }
+
+        $item_story_id = (int) get_post_meta($item_id, 'story_id', true);
+        if ( $item_story_id !== $story_id ) {
+            return false;
+        }
+
+        global $wpdb;
+        $views_table = Koopo_Stories_Views_Table::table_name();
+        $wpdb->delete($views_table, [ 'story_item_id' => $item_id ], [ '%d' ]);
+
+        if ( class_exists('Koopo_Stories_Stickers') ) {
+            $wpdb->delete($wpdb->prefix . Koopo_Stories_Stickers::TABLE_NAME, [ 'item_id' => $item_id ], [ '%d' ]);
+        }
+        if ( class_exists('Koopo_Stories_Reactions') ) {
+            $wpdb->delete($wpdb->prefix . Koopo_Stories_Reactions::TABLE_NAME, [ 'item_id' => $item_id ], [ '%d' ]);
+        }
+        if ( class_exists('Koopo_Stories_Replies') ) {
+            $wpdb->delete($wpdb->prefix . Koopo_Stories_Replies::TABLE_NAME, [ 'item_id' => $item_id ], [ '%d' ]);
+        }
+
+        $attachment_id = (int) get_post_meta($item_id, 'attachment_id', true);
+        wp_delete_post($item_id, true);
+        if ( $attachment_id > 0 ) {
+            wp_delete_attachment($attachment_id, true);
+        }
+
+        return true;
     }
 }

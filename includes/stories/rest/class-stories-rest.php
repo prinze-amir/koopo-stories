@@ -61,6 +61,21 @@ class Koopo_Stories_REST {
             ],
         ] );
 
+        register_rest_route( Koopo_Stories_Module::REST_NS, '/stories/(?P<story_id>\d+)/items/(?P<item_id>\d+)', [
+            'methods' => WP_REST_Server::DELETABLE,
+            'callback' => [ 'Koopo_Stories_REST_Story', 'delete_story_item' ],
+            'permission_callback' => [ __CLASS__, 'must_be_logged_in' ],
+        ] );
+
+        register_rest_route( Koopo_Stories_Module::REST_NS, '/stories/(?P<story_id>\d+)/activity', [
+            'methods' => WP_REST_Server::CREATABLE,
+            'callback' => [ 'Koopo_Stories_REST_Story', 'share_story_to_activity' ],
+            'permission_callback' => [ __CLASS__, 'must_be_logged_in' ],
+            'args' => [
+                'item_id' => [ 'default' => 0 ],
+            ],
+        ] );
+
         register_rest_route( Koopo_Stories_Module::REST_NS, '/stories/(?P<story_id>\d+)/hide', [
             'methods' => WP_REST_Server::READABLE,
             'callback' => [ 'Koopo_Stories_REST_Story', 'get_story_hidden_users' ],
@@ -212,6 +227,12 @@ class Koopo_Stories_REST {
         ] );
 
         // Stickers
+        register_rest_route( Koopo_Stories_Module::REST_NS, '/stories/stickers/providers', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [ 'Koopo_Stories_REST_Stickers', 'get_providers' ],
+            'permission_callback' => [ __CLASS__, 'must_be_logged_in' ],
+        ] );
+
         register_rest_route( Koopo_Stories_Module::REST_NS, '/stories/(?P<story_id>\d+)/items/(?P<item_id>\d+)/stickers', [
             'methods' => WP_REST_Server::CREATABLE,
             'callback' => [ 'Koopo_Stories_REST_Stickers', 'add_sticker' ],

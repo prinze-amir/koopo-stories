@@ -19,6 +19,7 @@ class Koopo_Stories_REST_Feed {
 
         $cache_key = Koopo_Stories_Utils::build_feed_cache_key($user_id, [
             'scope' => $scope,
+            'only_me' => $only_me,
             'exclude_me' => $exclude_me,
             'order' => $order,
             'limit' => $limit,
@@ -71,6 +72,9 @@ class Koopo_Stories_REST_Feed {
             'post_type' => Koopo_Stories_Module::CPT_STORY,
             'post_status' => 'publish',
             'posts_per_page' => $query_limit,
+            'ignore_sticky_posts' => true,
+            'update_post_meta_cache' => false,
+            'update_post_term_cache' => false,
             'orderby' => ($order === 'recent_activity' || $order === 'unseen_first') ? 'modified' : 'date',
             'order' => 'DESC',
             'meta_query' => [
@@ -115,14 +119,10 @@ class Koopo_Stories_REST_Feed {
                 // Build a nested meta_query: ( (expires_at > now OR expires_at NOT EXISTS) AND privacy = public )
                 $q_public = $q;
                 unset($q_public['author__in']);
-                $q_public['meta_query'] = [
-                    'relation' => 'AND',
-                    $expiry_clause,
-                    [
-                        'key' => 'privacy',
-                        'value' => 'public',
-                        'compare' => '=',
-                    ],
+                $q_public['meta_query'][] = [
+                    'key' => 'privacy',
+                    'value' => 'public',
+                    'compare' => '=',
                 ];
 
                 // Respect exclude_me for the public pass too.
@@ -156,32 +156,38 @@ class Koopo_Stories_REST_Feed {
             return ($ta > $tb) ? -1 : 1;
         });
 
-        // Preload all items for these stories in a single query to avoid per-story lookups.
-        $story_ids = array_map(function($p){ return (int) $p->ID; }, $stories);
-        $items_by_story = [];
-        if ( ! empty($story_ids) ) {
-            $items_all = get_posts([
-                'post_type' => Koopo_Stories_Module::CPT_ITEM,
-                'post_status' => 'publish',
-                'fields' => 'ids',
-                'posts_per_page' => -1,
-                'meta_query' => [
-                    [
-                        'key' => 'story_id',
-                        'value' => $story_ids,
-                        'compare' => 'IN',
-                    ],
-                ],
-                'orderby' => 'date',
-                'order' => 'ASC',
-            ]);
+        $story_ids = array_values(array_unique(array_map(function($p){ return (int) $p->ID; }, $stories)));
+        if ( empty($story_ids) ) {
+            $payload = [
+                'api_version' => Koopo_Stories_REST::API_VERSION,
+                'stories' => [],
+            ];
+            $cache_ttl = Koopo_Stories_Utils::get_cache_ttl('feed', 60);
+            set_transient($cache_key, $payload, $cache_ttl);
+            return new WP_REST_Response($payload, 200);
+        }
 
-            foreach ( $items_all as $item_id ) {
-                $sid = (int) get_post_meta($item_id, 'story_id', true);
-                if ( $sid <= 0 ) continue;
-                if ( ! isset($items_by_story[$sid]) ) $items_by_story[$sid] = [];
-                $items_by_story[$sid][] = (int) $item_id;
+        update_meta_cache('post', $story_ids);
+
+        $items_by_story = [];
+        $first_item_by_story = [];
+        foreach ( self::get_story_item_rows($story_ids, 'ASC') as $row ) {
+            $sid = (int) ($row['story_id'] ?? 0);
+            $item_id = (int) ($row['item_id'] ?? 0);
+            if ( $sid <= 0 || $item_id <= 0 ) {
+                continue;
             }
+            if ( ! isset($items_by_story[$sid]) ) {
+                $items_by_story[$sid] = [];
+            }
+            $items_by_story[$sid][] = $item_id;
+            if ( ! isset($first_item_by_story[$sid]) ) {
+                $first_item_by_story[$sid] = $item_id;
+            }
+        }
+
+        if ( ! empty($first_item_by_story) ) {
+            update_meta_cache('post', array_values($first_item_by_story));
         }
 
         // Group stories by author_id
@@ -220,7 +226,9 @@ class Koopo_Stories_REST_Feed {
             // Add this story's data to the author group
             $grouped[$author_id]['story_ids'][] = $sid;
             $grouped[$author_id]['items_count'] += $items_count;
-            $grouped[$author_id]['all_items'] = array_merge($grouped[$author_id]['all_items'], $items);
+            foreach ( $items as $item_id ) {
+                $grouped[$author_id]['all_items'][] = (int) $item_id;
+            }
 
             // Update last_updated if this story is more recent
             $story_updated = get_post_modified_time(DATE_ATOM, true, $sid);
@@ -229,32 +237,49 @@ class Koopo_Stories_REST_Feed {
             }
 
             // Set cover thumb from first item if not set
-            if ( empty($grouped[$author_id]['cover_thumb']) && !empty($items) ) {
-                $first_item_id = (int) $items[0];
+            if ( empty($grouped[$author_id]['cover_thumb']) ) {
+                $first_item_id = (int) ($first_item_by_story[$sid] ?? 0);
                 $thumb = Koopo_Stories_Utils::get_story_cover_thumb($first_item_id, 'thumbnail');
                 if ( $thumb ) $grouped[$author_id]['cover_thumb'] = $thumb;
             }
 
             // Update privacy if this story is more restrictive
-            $privacy = get_post_meta($sid, 'privacy', true);
+            $privacy = Koopo_Stories_Utils::normalize_privacy(get_post_meta($sid, 'privacy', true));
             $grouped[$author_id]['privacy'] = Koopo_Stories_Utils::pick_more_restrictive_privacy(
                 $grouped[$author_id]['privacy'],
                 $privacy
             );
         }
 
-        // Calculate unseen counts for each author's grouped stories
+        // Calculate unseen counts for each author's grouped stories.
+        // Use a single seen lookup for all grouped items to avoid N queries by author.
+        $all_group_item_ids = [];
+        foreach ( $grouped as $data ) {
+            if ( ! empty($data['all_items']) ) {
+                foreach ( $data['all_items'] as $item_id ) {
+                    $all_group_item_ids[] = (int) $item_id;
+                }
+            }
+        }
+        $all_group_item_ids = array_values(array_unique(array_map('intval', $all_group_item_ids)));
+        $seen_map_all = empty($all_group_item_ids)
+            ? []
+            : Koopo_Stories_Views_Table::has_seen_any($all_group_item_ids, $user_id);
+
         $out = [];
         foreach ( $grouped as $author_id => $data ) {
             $all_items = $data['all_items'];
-            $seen_map = Koopo_Stories_Views_Table::has_seen_any($all_items, $user_id);
 
             $has_unseen = false;
             $unseen_count = 0;
+            $first_unseen_item_id = 0;
             foreach ($all_items as $iid) {
-                if ( empty($seen_map[(int)$iid]) ) {
+                if ( empty($seen_map_all[(int)$iid]) ) {
                     $has_unseen = true;
                     $unseen_count++;
+                    if ( $first_unseen_item_id === 0 ) {
+                        $first_unseen_item_id = (int) $iid;
+                    }
                 }
             }
 
@@ -266,6 +291,7 @@ class Koopo_Stories_REST_Feed {
                 'last_updated' => $data['last_updated'],
                 'has_unseen' => $has_unseen,
                 'unseen_count' => $unseen_count,
+                'first_unseen_item_id' => $first_unseen_item_id > 0 ? $first_unseen_item_id : null,
                 'items_count' => $data['items_count'],
                 'privacy' => $data['privacy'],
             ];
@@ -305,6 +331,7 @@ class Koopo_Stories_REST_Feed {
         $limit = max(1, min(50, intval($req->get_param('limit') ?: 20)));
         $page = max(1, intval($req->get_param('page') ?: 1));
         $compact = $req->get_param('compact') === '1' || $req->get_param('mobile') === '1';
+        $offset = ($page - 1) * $limit;
 
         $cache_key = Koopo_Stories_Utils::build_archive_cache_key($user_id, [
             'limit' => $limit,
@@ -316,90 +343,59 @@ class Koopo_Stories_REST_Feed {
             return new WP_REST_Response($cached, 200);
         }
 
-        $archived_story_ids = get_posts([
-            'post_type' => Koopo_Stories_Module::CPT_STORY,
-            'post_status' => 'any',
-            'author' => $user_id,
-            'posts_per_page' => -1,
-            'fields' => 'ids',
-            'meta_query' => [
-                [
-                    'key' => 'is_archived',
-                    'value' => 1,
-                    'compare' => '=',
-                    'type' => 'NUMERIC',
-                ],
-            ],
-        ]);
+        $total = self::count_archived_items($user_id);
+        $rows = $total > 0 ? self::get_archived_item_rows($user_id, $limit, $offset) : [];
+        $item_ids = array_values(array_unique(array_map(function( $row ) {
+            return (int) ($row['item_id'] ?? 0);
+        }, $rows)));
 
+        if ( ! empty($item_ids) ) {
+            update_meta_cache('post', $item_ids);
+        }
+
+        $view_counts = Koopo_Stories_Views_Table::get_view_counts($item_ids);
         $out = [];
-        $archived_story_ids = array_values(array_filter(array_map('intval', is_array($archived_story_ids) ? $archived_story_ids : [])));
-        if ( ! empty($archived_story_ids) ) {
-            $query = new WP_Query([
-                'post_type' => Koopo_Stories_Module::CPT_ITEM,
-                'post_status' => 'publish',
-                'posts_per_page' => $limit,
-                'paged' => $page,
-                'orderby' => 'date',
-                'order' => 'DESC',
-                'meta_query' => [
-                    [
-                        'key' => 'story_id',
-                        'value' => $archived_story_ids,
-                        'compare' => 'IN',
-                        'type' => 'NUMERIC',
-                    ],
-                ],
-            ]);
-
-            $story_cache = [];
-            foreach ( $query->posts as $item_post ) {
-                $item_id = (int) $item_post->ID;
-                $sid = (int) get_post_meta($item_id, 'story_id', true);
-                if ( $sid <= 0 ) continue;
-
-                if ( ! isset($story_cache[$sid]) ) {
-                    $story_cache[$sid] = get_post($sid);
-                }
-                $story = $story_cache[$sid];
-                if ( ! $story ) continue;
-
-                $author_id = (int) $story->post_author;
-                $item_payload = Koopo_Stories_Utils::build_story_item_payload($item_id, false);
-                $cover_thumb = Koopo_Stories_Utils::get_story_cover_thumb($item_id, 'thumbnail');
-                $item_type = is_array($item_payload) ? ($item_payload['type'] ?? 'image') : 'image';
-                $item_src = is_array($item_payload) ? ($item_payload['src'] ?? '') : '';
-                $privacy = Koopo_Stories_REST::normalize_privacy(get_post_meta($sid, 'privacy', true));
-
-                $out[] = [
-                    'story_id' => $sid,
-                    'item_id' => $item_id,
-                    'is_archive_item' => true,
-                    'author' => Koopo_Stories_Utils::get_author_payload($author_id, 96, true),
-                    'cover_thumb' => $cover_thumb,
-                    'item_type' => $item_type,
-                    'item_src' => $item_src,
-                    'last_updated' => get_post_modified_time(DATE_ATOM, true, $item_id),
-                    'created_at' => mysql_to_rfc3339( get_gmt_from_date($item_post->post_date) ),
-                    'has_unseen' => false,
-                    'unseen_count' => 0,
-                    'items_count' => 1,
-                    'privacy' => $privacy,
-                    'view_count' => Koopo_Stories_Views_Table::get_view_count($item_id),
-                    'is_archived' => true,
-                ];
+        foreach ( $rows as $row ) {
+            $item_id = (int) ($row['item_id'] ?? 0);
+            $sid = (int) ($row['story_id'] ?? 0);
+            if ( $item_id <= 0 || $sid <= 0 ) {
+                continue;
             }
 
-            $total = isset($query->found_posts) ? (int) $query->found_posts : 0;
-            $has_more = ($page * $limit) < $total;
-        } else {
-            $has_more = false;
+            $item_payload = Koopo_Stories_Utils::build_story_item_payload($item_id, false);
+            if ( ! is_array($item_payload) || empty($item_payload['src']) ) {
+                continue;
+            }
+
+            $out[] = [
+                'story_id' => $sid,
+                'item_id' => $item_id,
+                'is_archive_item' => true,
+                'author' => Koopo_Stories_Utils::get_author_payload((int) ($row['author_id'] ?? $user_id), 96, true),
+                'cover_thumb' => Koopo_Stories_Utils::get_story_cover_thumb($item_id, 'thumbnail'),
+                'item_type' => $item_payload['type'] ?? 'image',
+                'item_src' => $item_payload['src'] ?? '',
+                'last_updated' => self::format_rfc3339_datetime(
+                    (string) ($row['post_modified_gmt'] ?? ''),
+                    (string) ($row['post_modified'] ?? '')
+                ),
+                'created_at' => self::format_rfc3339_datetime(
+                    (string) ($row['post_date_gmt'] ?? ''),
+                    (string) ($row['post_date'] ?? '')
+                ),
+                'has_unseen' => false,
+                'unseen_count' => 0,
+                'items_count' => 1,
+                'privacy' => Koopo_Stories_REST::normalize_privacy((string) ($row['privacy'] ?? '')),
+                'view_count' => (int) ($view_counts[$item_id] ?? 0),
+                'is_archived' => true,
+            ];
         }
 
         $payload = [
             'api_version' => Koopo_Stories_REST::API_VERSION,
             'stories' => $out,
-            'has_more' => $has_more,
+            'has_more' => ($offset + count($rows)) < $total,
             'page' => $page,
         ];
 
@@ -412,5 +408,112 @@ class Koopo_Stories_REST_Feed {
         $cache_ttl = Koopo_Stories_Utils::get_cache_ttl('archive', 60);
         set_transient($cache_key, $payload, $cache_ttl);
         return new WP_REST_Response($payload, 200);
+    }
+
+    private static function get_story_item_rows( array $story_ids, string $order = 'ASC' ) : array {
+        global $wpdb;
+
+        $story_ids = array_values(array_unique(array_filter(array_map('intval', $story_ids))));
+        if ( empty($story_ids) ) {
+            return [];
+        }
+
+        $order = strtoupper($order) === 'DESC' ? 'DESC' : 'ASC';
+        $placeholders = implode(',', array_fill(0, count($story_ids), '%d'));
+        $rows = $wpdb->get_results( $wpdb->prepare(
+            "SELECT p.ID AS item_id, CAST(pm_story.meta_value AS UNSIGNED) AS story_id
+             FROM {$wpdb->posts} p
+             INNER JOIN {$wpdb->postmeta} pm_story
+                ON pm_story.post_id = p.ID
+               AND pm_story.meta_key = 'story_id'
+             WHERE p.post_type = %s
+               AND p.post_status = 'publish'
+               AND CAST(pm_story.meta_value AS UNSIGNED) IN ({$placeholders})
+             ORDER BY p.post_date {$order}, p.ID {$order}",
+            array_merge([ Koopo_Stories_Module::CPT_ITEM ], $story_ids)
+        ), ARRAY_A);
+
+        return is_array($rows) ? $rows : [];
+    }
+
+    private static function get_archived_item_rows( int $user_id, int $limit, int $offset ) : array {
+        global $wpdb;
+
+        $rows = $wpdb->get_results( $wpdb->prepare(
+            "SELECT DISTINCT
+                i.ID AS item_id,
+                i.post_date,
+                i.post_date_gmt,
+                i.post_modified,
+                i.post_modified_gmt,
+                s.ID AS story_id,
+                s.post_author AS author_id,
+                pm_privacy.meta_value AS privacy
+             FROM {$wpdb->posts} i
+             INNER JOIN {$wpdb->postmeta} pm_story
+                ON pm_story.post_id = i.ID
+               AND pm_story.meta_key = 'story_id'
+             INNER JOIN {$wpdb->posts} s
+                ON s.ID = CAST(pm_story.meta_value AS UNSIGNED)
+             INNER JOIN {$wpdb->postmeta} pm_archived
+                ON pm_archived.post_id = s.ID
+               AND pm_archived.meta_key = 'is_archived'
+               AND pm_archived.meta_value = '1'
+             LEFT JOIN {$wpdb->postmeta} pm_privacy
+                ON pm_privacy.post_id = s.ID
+               AND pm_privacy.meta_key = 'privacy'
+             WHERE i.post_type = %s
+               AND i.post_status = 'publish'
+               AND s.post_type = %s
+               AND s.post_author = %d
+             ORDER BY i.post_date DESC, i.ID DESC
+             LIMIT %d OFFSET %d",
+            Koopo_Stories_Module::CPT_ITEM,
+            Koopo_Stories_Module::CPT_STORY,
+            $user_id,
+            $limit,
+            $offset
+        ), ARRAY_A);
+
+        return is_array($rows) ? $rows : [];
+    }
+
+    private static function count_archived_items( int $user_id ) : int {
+        global $wpdb;
+
+        return (int) $wpdb->get_var( $wpdb->prepare(
+            "SELECT COUNT(DISTINCT i.ID)
+             FROM {$wpdb->posts} i
+             INNER JOIN {$wpdb->postmeta} pm_story
+                ON pm_story.post_id = i.ID
+               AND pm_story.meta_key = 'story_id'
+             INNER JOIN {$wpdb->posts} s
+                ON s.ID = CAST(pm_story.meta_value AS UNSIGNED)
+             INNER JOIN {$wpdb->postmeta} pm_archived
+                ON pm_archived.post_id = s.ID
+               AND pm_archived.meta_key = 'is_archived'
+               AND pm_archived.meta_value = '1'
+             WHERE i.post_type = %s
+               AND i.post_status = 'publish'
+               AND s.post_type = %s
+               AND s.post_author = %d",
+            Koopo_Stories_Module::CPT_ITEM,
+            Koopo_Stories_Module::CPT_STORY,
+            $user_id
+        ) );
+    }
+
+    private static function format_rfc3339_datetime( string $gmt, string $local ) : string {
+        $gmt = trim($gmt);
+        if ( $gmt !== '' && $gmt !== '0000-00-00 00:00:00' ) {
+            return mysql_to_rfc3339($gmt);
+        }
+
+        $local = trim($local);
+        if ( $local !== '' && $local !== '0000-00-00 00:00:00' ) {
+            return mysql_to_rfc3339( get_gmt_from_date($local) );
+        }
+
+        return '';
     }
 }

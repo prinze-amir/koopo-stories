@@ -330,7 +330,10 @@ class Koopo_Stories_REST_Engagement {
     public static function update_report( WP_REST_Request $req ) {
         $report_id = (int) $req['report_id'];
         $status = sanitize_text_field( $req->get_param('status') ?: 'reviewed' );
-        $action_taken = sanitize_text_field( $req->get_param('action_taken') ?: null );
+        $action_taken = $req->get_param('action_taken');
+        $action_taken = is_string($action_taken) && $action_taken !== ''
+            ? sanitize_text_field($action_taken)
+            : null;
         $reviewer_id = get_current_user_id();
 
         $success = Koopo_Stories_Reports::update_report_status($report_id, $status, $reviewer_id, $action_taken);

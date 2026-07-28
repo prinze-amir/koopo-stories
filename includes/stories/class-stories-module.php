@@ -70,6 +70,7 @@ final class Koopo_Stories_Module
         // REST (only when enabled)
         if ($enabled) {
             add_action('rest_api_init', ['Koopo_Stories_REST', 'register_routes']);
+            add_action('koopo_stories_generate_attachment_metadata', ['Koopo_Stories_REST_Story', 'generate_attachment_metadata']);
             Koopo_Stories_Share::init();
         }
 
@@ -187,7 +188,22 @@ final class Koopo_Stories_Module
             'shareAjaxUrl' => admin_url('admin-ajax.php'),
             'shareNonce' => wp_create_nonce('koopo_stories_share'),
             'shareStoryToActivity' => get_option('koopo_stories_share_story_to_activity', '1') === '1',
+            'defaultPrivacy' => Koopo_Stories_Utils::get_default_privacy(),
+            'activitySharePrivacies' => class_exists('Koopo_Stories_Share')
+                ? Koopo_Stories_Share::get_supported_activity_story_privacies()
+                : ['public', 'friends'],
+            'activityShareUnsupportedMessage' => __('This privacy cannot be preserved when sharing to activity.', 'koopo'),
+            'maxUploadBytes' => Koopo_Stories_Utils::get_max_upload_size_bytes(),
         ]);
+        wp_localize_script(
+            'koopo-stories',
+            'KoopoStoriesDirectUpload',
+            apply_filters('koopo_stories_direct_upload_config', [
+                'enabled' => false,
+                'restUrl' => '',
+                'nonce' => '',
+            ])
+        );
 
         wp_localize_script('koopo-stories', 'KoopoStoriesI18n', [
             'archive_empty' => __('Archive empty', 'koopo'),

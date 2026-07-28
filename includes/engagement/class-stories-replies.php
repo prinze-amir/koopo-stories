@@ -39,7 +39,7 @@ class Koopo_Stories_Replies {
     /**
      * Add a reply
      */
-    public static function add_reply( int $story_id, int $user_id, string $message, int $item_id = null, bool $is_dm = true ) : int {
+    public static function add_reply( int $story_id, int $user_id, string $message, ?int $item_id = null, bool $is_dm = true ) : int {
         global $wpdb;
         $table = $wpdb->prefix . self::TABLE_NAME;
 
@@ -92,7 +92,7 @@ class Koopo_Stories_Replies {
     /**
      * Get replies for a story (DMs only visible to story author)
      */
-    public static function get_replies( int $story_id, int $viewer_id, int $item_id = null, int $limit = 50 ) : array {
+    public static function get_replies( int $story_id, int $viewer_id, ?int $item_id = null, int $limit = 50 ) : array {
         global $wpdb;
         $table = $wpdb->prefix . self::TABLE_NAME;
 
@@ -142,7 +142,7 @@ class Koopo_Stories_Replies {
     /**
      * Get reply count for a story
      */
-    public static function get_reply_count( int $story_id, int $item_id = null ) : int {
+    public static function get_reply_count( int $story_id, ?int $item_id = null ) : int {
         global $wpdb;
         $table = $wpdb->prefix . self::TABLE_NAME;
 

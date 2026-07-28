@@ -23,20 +23,39 @@
             return map[mime] || 'bin';
         };
 
+        const inferMediaKindFromUrl = (url) => {
+            const ext = String(url || '').split(/[?#]/)[0].split('.').pop().toLowerCase();
+            if (['mp4', 'mov', 'm4v', 'webm', '3gp', '3g2', 'avi', 'mkv'].includes(ext)) return 'video';
+            if (['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif', 'avif'].includes(ext)) return 'image';
+            return '';
+        };
+
+        const inferMimeFromMedia = (kind, url) => {
+            const ext = String(url || '').split(/[?#]/)[0].split('.').pop().toLowerCase();
+            if (ext === 'mov') return 'video/quicktime';
+            if (ext === 'webm') return 'video/webm';
+            if (ext === 'm4v') return 'video/mp4';
+            if (ext === 'mp4') return 'video/mp4';
+            if (ext === 'png') return 'image/png';
+            if (ext === 'webp') return 'image/webp';
+            if (ext === 'gif') return 'image/gif';
+            return kind === 'video' ? 'video/mp4' : 'image/jpeg';
+        };
+
         const detectMediaFromActivity = (activityEntry) => {
             if (!activityEntry) return { url: '', kind: '' };
 
-            // 1) Images first
-            const mediaImg = activityEntry.querySelector('.bp-activity-media img, .activity-inner img, .bp-activity-content img');
-            if (mediaImg && mediaImg.src) {
-                return { url: mediaImg.src, kind: 'image' };
-            }
-
-            // 2) Videos (BuddyBoss video posts / GIF-as-video)
+            // 1) Videos first so poster thumbnails do not mask actual video media.
             const videoEl = activityEntry.querySelector('.bp-activity-media video, .activity-inner video, .bp-activity-content video');
             if (videoEl) {
                 const src = videoEl.currentSrc || videoEl.src || (videoEl.querySelector('source') ? videoEl.querySelector('source').src : '');
                 if (src) return { url: src, kind: 'video' };
+            }
+
+            // 2) Images
+            const mediaImg = activityEntry.querySelector('.bp-activity-media img, .activity-inner img, .bp-activity-content img');
+            if (mediaImg && mediaImg.src) {
+                return { url: mediaImg.src, kind: 'image' };
             }
 
             // 3) Background image fallbacks used by some activity cards
@@ -338,27 +357,23 @@
                 return;
             }
 
+            const activityId = detectActivityId(btn);
             let mediaUrl = btn.dataset.img;
             let mediaKind = '';
             const linkUrl = btn.dataset.link || btn.dataset.activityLink || '';
             const title = btn.dataset.title || 'Shared Activity';
-            const activityId = detectActivityId(btn);
 
             // Handle auto image detection (e.g. for activity feed)
             if (mediaUrl === 'auto') {
-                // Find closest activity entry
-                let activityEntry = btn.closest('.activity-item') || btn.closest('.bp-activity-entry') || btn.closest('li.activity-item');
-                if (!activityEntry && activityId) {
-                    activityEntry = document.querySelector(`[data-bp-activity-id="${activityId}"]`) || document.querySelector(`#activity-${activityId}`);
-                }
-                const detected = detectMediaFromActivity(activityEntry);
-                mediaUrl = detected.url;
-                mediaKind = detected.kind;
-
-                if ((!mediaUrl || mediaUrl === 'auto') && activityId) {
+                if (activityId) {
                     const serverDetected = await fetchActivityMedia(activityId);
                     mediaUrl = serverDetected.url;
-                    mediaKind = mediaKind || serverDetected.kind;
+                    mediaKind = serverDetected.kind;
+                } else {
+                    const activityEntry = btn.closest('.activity-item') || btn.closest('.bp-activity-entry') || btn.closest('li.activity-item');
+                    const detected = detectMediaFromActivity(activityEntry);
+                    mediaUrl = detected.url;
+                    mediaKind = detected.kind;
                 }
             }
 
@@ -389,7 +404,9 @@
                 const blob = await response.blob();
 
                 // Create File object
-                const mime = blob.type || (mediaKind === 'video' ? 'video/mp4' : 'image/jpeg');
+                mediaKind = mediaKind || inferMediaKindFromUrl(mediaUrl) || inferMediaKindFromUrl(response.url);
+                const blobMime = blob.type && blob.type !== 'application/octet-stream' ? blob.type : '';
+                const mime = blobMime || inferMimeFromMedia(mediaKind, mediaUrl || response.url);
                 const ext = inferExtFromMime(mime);
                 const file = new File([blob], `share-story.${ext}`, { type: mime });
 
@@ -409,7 +426,7 @@
                 }
 
                 // Open Composer
-                composer.openComposer(file, { stickers });
+                composer.openComposer(file, { stickers, mediaKind, url: mediaUrl || response.url });
 
             } catch (err) {
                 console.error('Share failed:', err);

@@ -3,7 +3,7 @@ if ( ! defined('ABSPATH') ) exit;
 
 /**
  * Koopo Stories Stickers
- * Manages interactive stickers: mentions, links, locations, and polls
+ * Manages interactive stickers: mentions, links, locations, polls, text, filters, AR effects, and media/GIF.
  */
 class Koopo_Stories_Stickers {
 
@@ -42,31 +42,19 @@ class Koopo_Stories_Stickers {
     public static function add_sticker( int $story_id, int $item_id, string $type, array $data, float $x = 50.0, float $y = 50.0 ) : int {
         global $wpdb;
         $table = $wpdb->prefix . self::TABLE_NAME;
-
-        error_log('Koopo Stickers - add_sticker called with: ' . json_encode([
-            'story_id' => $story_id,
-            'item_id' => $item_id,
-            'type' => $type,
-            'data' => $data,
-            'x' => $x,
-            'y' => $y,
-        ]));
+        $type = self::normalize_sticker_type($type);
 
         // Validate sticker type
-        $allowed_types = ['mention', 'link', 'location', 'poll', 'text', 'media'];
+        $allowed_types = ['mention', 'link', 'location', 'poll', 'text', 'media', 'shared_post', 'filter', 'ar_effect'];
         if ( ! in_array($type, $allowed_types, true) ) {
-            error_log('Koopo Stickers - Invalid type: ' . $type);
             return 0;
         }
 
         // Validate and sanitize data based on type
         $sanitized_data = self::sanitize_sticker_data($type, $data);
         if ( empty($sanitized_data) ) {
-            error_log('Koopo Stickers - Sanitize failed. Original data: ' . json_encode($data));
             return 0;
         }
-
-        error_log('Koopo Stickers - Sanitized data: ' . json_encode($sanitized_data));
 
         $result = $wpdb->insert(
             $table,
@@ -83,12 +71,21 @@ class Koopo_Stories_Stickers {
         );
 
         if ( $result === false ) {
-            error_log('Koopo Stickers - Database insert failed. wpdb->last_error: ' . $wpdb->last_error);
             return 0;
         }
 
-        error_log('Koopo Stickers - Successfully inserted sticker with ID: ' . $wpdb->insert_id);
         return (int) $wpdb->insert_id;
+    }
+
+    private static function normalize_sticker_type( string $type ) : string {
+        $type = sanitize_key($type);
+        $aliases = [
+            'gif' => 'media',
+            'giphy' => 'media',
+            'tenor' => 'media',
+            'lottie' => 'media',
+        ];
+        return $aliases[$type] ?? $type;
     }
 
     /**
@@ -189,7 +186,6 @@ class Koopo_Stories_Stickers {
                 }
 
                 if ( ! $user ) {
-                    error_log('Koopo Stickers - Mention user not found. Data: ' . json_encode($data));
                     return [];
                 }
 
@@ -225,15 +221,34 @@ class Koopo_Stories_Stickers {
                 ];
 
             case 'location':
-                // Location: { name, lat, lng, address }
+                // Location: { name, lat/lng, address, provider metadata }
                 if ( empty($data['name']) ) {
                     return [];
                 }
+                $lat = isset($data['lat']) ? (float) $data['lat'] : (isset($data['latitude']) ? (float) $data['latitude'] : null);
+                $lng = isset($data['lng']) ? (float) $data['lng'] : (isset($data['longitude']) ? (float) $data['longitude'] : null);
+                $provider = isset($data['provider']) ? sanitize_key($data['provider']) : '';
+                if ( ! in_array($provider, ['', 'google', 'custom'], true) ) {
+                    $provider = 'custom';
+                }
+                $provider_place_id = isset($data['provider_place_id']) ? sanitize_text_field((string) $data['provider_place_id']) : '';
+                $map_url = '';
+                if ( ! empty($data['map_url']) ) {
+                    $map_url = esc_url_raw((string) $data['map_url']);
+                } elseif ( ! empty($data['mapUrl']) ) {
+                    $map_url = esc_url_raw((string) $data['mapUrl']);
+                }
                 return [
                     'name' => sanitize_text_field($data['name']),
-                    'lat' => isset($data['lat']) ? (float) $data['lat'] : null,
-                    'lng' => isset($data['lng']) ? (float) $data['lng'] : null,
+                    'lat' => $lat,
+                    'lng' => $lng,
+                    'latitude' => $lat,
+                    'longitude' => $lng,
                     'address' => isset($data['address']) ? sanitize_text_field($data['address']) : '',
+                    'provider' => $provider,
+                    'provider_place_id' => $provider_place_id,
+                    'map_url' => $map_url,
+                    'mapUrl' => $map_url,
                     'style' => self::sanitize_style($data['style'] ?? []),
                 ];
 
@@ -245,18 +260,26 @@ class Koopo_Stories_Stickers {
                 $options = [];
                 foreach ( $data['options'] as $idx => $opt ) {
                     if ( is_string($opt) ) {
+                        $text = sanitize_text_field($opt);
+                        if ( $text === '' ) {
+                            continue;
+                        }
                         $options[] = [
-                            'text' => sanitize_text_field($opt),
+                            'text' => $text,
                             'votes' => 0,
                         ];
                     } elseif ( is_array($opt) && isset($opt['text']) ) {
+                        $text = sanitize_text_field($opt['text']);
+                        if ( $text === '' ) {
+                            continue;
+                        }
                         $options[] = [
-                            'text' => sanitize_text_field($opt['text']),
+                            'text' => $text,
                             'votes' => isset($opt['votes']) ? (int) $opt['votes'] : 0,
                         ];
                     }
                 }
-                if ( count($options) < 2 || count($options) > 4 ) {
+                if ( count($options) < 2 || count($options) > 6 ) {
                     return [];
                 }
                 return [
@@ -272,6 +295,34 @@ class Koopo_Stories_Stickers {
                     'text' => sanitize_textarea_field($data['text']),
                     'style' => self::sanitize_style($data['style'] ?? []),
                 ];
+            case 'filter':
+                $key = isset($data['key']) ? sanitize_key($data['key']) : '';
+                $allowed_filter_keys = ['warm', 'cool', 'mono', 'golden', 'cinema', 'rose', 'neon'];
+                if ( ! in_array($key, $allowed_filter_keys, true) ) {
+                    return [];
+                }
+                $tint = isset($data['tint']) ? sanitize_hex_color((string) $data['tint']) : '';
+                $opacity = isset($data['opacity']) ? (float) $data['opacity'] : 0.0;
+                if ( ! $tint || $opacity <= 0 ) {
+                    return [];
+                }
+                return [
+                    'key' => $key,
+                    'tint' => $tint,
+                    'opacity' => max(0.0, min(0.55, $opacity)),
+                ];
+            case 'ar_effect':
+                $key = isset($data['key']) ? sanitize_key($data['key']) : '';
+                $allowed_ar_effect_keys = ['glasses', 'beauty-glow', 'soft-glam', 'fresh-tone', 'studio-warm'];
+                if ( ! in_array($key, $allowed_ar_effect_keys, true) ) {
+                    return [];
+                }
+                return [
+                    'key' => $key,
+                    'provider' => isset($data['provider']) ? sanitize_key($data['provider']) : 'mediapipe',
+                    'renderer' => isset($data['renderer']) ? sanitize_key($data['renderer']) : 'skia',
+                    'frame' => self::sanitize_ar_effect_frame($data['frame'] ?? null),
+                ];
             case 'media':
                 if (empty($data['url'])) {
                     return [];
@@ -281,13 +332,64 @@ class Koopo_Stories_Stickers {
                     return [];
                 }
                 $mime = isset($data['mime']) ? sanitize_text_field($data['mime']) : '';
+                if ( $mime === '' ) {
+                    $path = (string) parse_url($url, PHP_URL_PATH);
+                    $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+                    if ( $ext === 'gif' ) {
+                        $mime = 'image/gif';
+                    } elseif ( $ext === 'json' ) {
+                        $mime = 'application/json';
+                    }
+                }
+
                 $provider = isset($data['provider']) ? sanitize_key($data['provider']) : '';
+                if ( $provider === '' && $mime === 'image/gif' ) {
+                    $provider = 'giphy';
+                }
+                if ( ! in_array($provider, ['', 'giphy', 'tenor', 'lottie', 'external'], true) ) {
+                    $provider = 'external';
+                }
                 $title = isset($data['title']) ? sanitize_text_field($data['title']) : '';
                 return [
                     'url' => $url,
                     'mime' => $mime,
                     'provider' => $provider,
                     'title' => $title,
+                    'style' => self::sanitize_style($data['style'] ?? []),
+                ];
+            case 'shared_post':
+                $title = isset($data['title']) ? sanitize_text_field($data['title']) : '';
+                $caption = isset($data['caption']) ? sanitize_textarea_field($data['caption']) : '';
+                $author_name = isset($data['author_name']) ? sanitize_text_field($data['author_name']) : (isset($data['authorName']) ? sanitize_text_field($data['authorName']) : '');
+                $image_url = '';
+                if ( ! empty($data['image_url']) ) {
+                    $image_url = esc_url_raw((string) $data['image_url']);
+                } elseif ( ! empty($data['imageUrl']) ) {
+                    $image_url = esc_url_raw((string) $data['imageUrl']);
+                }
+                $link_url = '';
+                if ( ! empty($data['link_url']) ) {
+                    $link_url = esc_url_raw((string) $data['link_url']);
+                } elseif ( ! empty($data['linkUrl']) ) {
+                    $link_url = esc_url_raw((string) $data['linkUrl']);
+                }
+                $link_title = isset($data['link_title']) ? sanitize_text_field($data['link_title']) : (isset($data['linkTitle']) ? sanitize_text_field($data['linkTitle']) : '');
+
+                if ( $title === '' && $caption === '' && $image_url === '' ) {
+                    return [];
+                }
+
+                return [
+                    'author_name' => $author_name,
+                    'authorName' => $author_name,
+                    'title' => $title,
+                    'caption' => $caption,
+                    'image_url' => $image_url,
+                    'imageUrl' => $image_url,
+                    'link_url' => $link_url,
+                    'linkUrl' => $link_url,
+                    'link_title' => $link_title,
+                    'linkTitle' => $link_title,
                     'style' => self::sanitize_style($data['style'] ?? []),
                 ];
             default:
@@ -350,6 +452,55 @@ class Koopo_Stories_Stickers {
                 $out['text_align'] = (string) $style['text_align'];
             }
         }
+        return $out;
+    }
+
+    private static function sanitize_ar_effect_frame( $frame ) : array {
+        if ( ! is_array($frame) ) {
+            return [];
+        }
+
+        $out = [
+            'source' => isset($frame['source']) ? sanitize_key((string) $frame['source']) : 'mediapipe',
+            'status' => isset($frame['status']) ? sanitize_text_field((string) $frame['status']) : '',
+            'width' => isset($frame['width']) ? max(0, (float) $frame['width']) : null,
+            'height' => isset($frame['height']) ? max(0, (float) $frame['height']) : null,
+            'orientation' => isset($frame['orientation']) ? sanitize_key((string) $frame['orientation']) : '',
+            'mirrored' => ! empty($frame['mirrored']),
+            'faces' => [],
+        ];
+
+        $faces = isset($frame['faces']) && is_array($frame['faces']) ? array_slice($frame['faces'], 0, 1) : [];
+        foreach ( $faces as $face_index => $face ) {
+            if ( ! is_array($face) ) {
+                continue;
+            }
+            $points = isset($face['points']) && is_array($face['points']) ? array_slice($face['points'], 0, 520) : [];
+            $safe_points = [];
+            foreach ( $points as $point_index => $point ) {
+                if ( ! is_array($point) ) {
+                    continue;
+                }
+                $x = isset($point['x']) ? (float) $point['x'] : null;
+                $y = isset($point['y']) ? (float) $point['y'] : null;
+                if ( $x === null || $y === null || ! is_finite($x) || ! is_finite($y) ) {
+                    continue;
+                }
+                $safe_points[] = [
+                    'id' => isset($point['id']) ? sanitize_key((string) $point['id']) : ('p' . (int) $point_index),
+                    'x' => max(0.0, min(1.0, $x)),
+                    'y' => max(0.0, min(1.0, $y)),
+                    'z' => isset($point['z']) && is_finite((float) $point['z']) ? (float) $point['z'] : 0.0,
+                ];
+            }
+            if ( ! empty($safe_points) ) {
+                $out['faces'][] = [
+                    'id' => isset($face['id']) ? sanitize_key((string) $face['id']) : ('face-' . (int) $face_index),
+                    'points' => $safe_points,
+                ];
+            }
+        }
+
         return $out;
     }
 
